@@ -19,8 +19,8 @@ def test_cudnn_prefill_deepseek(
     if num_qo_heads < num_kv_heads:
         pytest.skip("num_qo_heads < num_kv_heads, skipping test")
 
-    head_dim_qk = 192
-    head_dim_vo = 128
+    head_dim_qk = 72
+    head_dim_vo = 72
 
     # test set up basics
     seed = 0
@@ -37,7 +37,7 @@ def test_cudnn_prefill_deepseek(
 
     cumsum_s_qo = torch.sum(actual_seq_lens_q)
 
-    q = torch.randn(
+    q = torch.ones(
         cumsum_s_qo, num_qo_heads, head_dim_qk, device=device, dtype=torch.bfloat16
     )
 
@@ -86,7 +86,7 @@ def test_cudnn_prefill_deepseek(
     #     ]
     # ).cuda()
 
-    k_cache = torch.randn(
+    k_cache = torch.ones(
         batch_size * s_kv,
         num_kv_heads,
         head_dim_qk,
@@ -164,6 +164,26 @@ def test_cudnn_prefill_deepseek(
         kv_data_type=torch.bfloat16,
     )
     output_ref, lse_ref = wrapper.run(q, k_cache, v_cache, return_lse=True)
+
+    print(f"\n {output.shape} == {output_ref.shape} \n")
+    print("output")
+    print(output[0:4, :, :10])
+    print("output_ref")
+    print(output_ref[0:4, :, :10])
+
+    print(f"v_cache shape {v_cache.shape}")
+    # print(v_cache[:,:,:10])
+
+    # x has shape (32, 1, 64)
+    result = v_cache.sum(dim=0, keepdim=True)  # result has shape (1, 1, 64)
+    print(f"result shape {result.shape}")
+    print(result[0:4, :, :10] * (1 / 32))
+
+    # after_softmax = torch.ones(batch_size * num_kv_heads, s_qo, s_kv, device=device, dtype=torch.bfloat16) * (1/32)
+    # print(f"softmax {after_softmax.shape} * v_cache {v_cache.shape}")
+    # temp_ref = after_softmax * v_cache
+    # print("temp_ref")
+    # print(temp_ref[:,:,:10])
 
     torch.testing.assert_close(
         output,
