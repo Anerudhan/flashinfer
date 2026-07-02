@@ -12,10 +12,45 @@ It spans **two repositories**:
 - **vLLM** — branch `feat/flashinfer-ep-all2all` off `Anerudhan/vllm` `main`
   (upstream `vllm-project/vllm` fork), cloned at `/home/scratch.agopal_sw/play/NCCL/vllm`.
 
-> Status: the code in both repos is complete and `py_compile`-clean. Multi-GPU correctness
-> and the perf matrix have **not** been run yet — they require GPUs (lyris). The LL
-> (BatchedExperts) path maps cleanly onto the FlashInfer API; the HT (Standard) path is
-> structurally complete with three on-GPU validation points called out in §6.
+> Status: code complete + **GPU-validated on Pre-Nyx (8×GPU, single node, CUDA 13.2)** — see
+> §0. Both `flashinfer_ep_low_latency` and `flashinfer_ep_high_throughput` pass end-to-end
+> (smoke, GSM8K, throughput). Deferred: DeepEP comparison column (DeepEP's own CUDA-13.2 build
+> fails), raw NCCL-EP backend (not in upstream vLLM), 2-node, and `bench serve` TTFT/TPOT.
+
+---
+
+## 0. Validated results (Pre-Nyx, 8×GPU single node, CUDA 13.2)
+
+Base image `nvcr.io/nvidia/pytorch:26.05-py3`; vLLM built from source (torch gate passed);
+FlashInfer run from the branch. All checks below **pass**:
+
+| Check | LL (`flashinfer_ep_low_latency`) | HT (`flashinfer_ep_high_throughput`) |
+|---|---|---|
+| GAP 1/2/3 unit tests (mocked nccl) | 14/14 | — |
+| EP dispatch+combine `--validate` @ world=8 | ✅ | ✅ |
+| vLLM e2e smoke (OLMoE, coherent output) | ✅ | ✅ |
+| **GSM8K 5-shot, Qwen3-30B-A3B** (flex / strict) | **0.852 / 0.894** | **0.858 / 0.897** |
+
+Both backends clear the GSM8K ≥ 0.80 gate (reference ~0.88).
+
+**Throughput vs DeepEP** (`vllm bench throughput --dataset-name random`, Qwen3-30B-A3B, 8-GPU
+EP, 1000 prompts; total tok/s):
+
+| ISL/OSL | FI-EP LL | FI-EP HT | DeepEP LL | DeepEP HT |
+|---|---|---|---|---|
+| 128 / 128 | 32,506 | 32,050 | 32,535 | 32,050 |
+| 2048 / 128 | 140,823 | 141,744 | 141,786 | 143,238 |
+| 128 / 2048 | 18,515 | 18,461 | 18,891 | 18,764 |
+
+GSM8K accuracy is within noise across all four backends; **throughput is within ~1–2% of
+DeepEP** across all three shapes. **Memory footprint is identical** across all four
+(150.45 GiB / 6.57M-token KV cache at `--gpu-memory-utilization 0.9`) — EP backend choice is
+memory-neutral. See
+[`vllm_moe_ep_results_prenyx.md`](vllm_moe_ep_results_prenyx.md) for the full method,
+per-backend req/s, GSM8K-vs-DeepEP table, multi-node (2-node/16-GPU), and reproduction.
+**Not measured:** raw NCCL-EP (N/A upstream), TTFT/TPOT via `bench serve`. **2-node/16-GPU:**
+Ray+TP=16 plumbing comes up but cross-node engine init stalls — reproduced with plain TP=16
+(no EP), so it's a cluster cross-node NCCL/fabric issue, not the EP integration (see results doc §1.4).
 
 ---
 
