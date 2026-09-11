@@ -2430,11 +2430,17 @@ def testBatchPrefillWithRaggedKVCacheWrapper(args):
             backends.remove("trtllm-gen")
     if "trtllm-native" in backends:
         remove_trtllm_native = False
-        if not (head_dim_qk == 192 and head_dim_vo == 128) and not (
-            head_dim_qk == 128 and head_dim_vo == 128
-        ):
+        # MLA head-dim pairs trtllm_ragged_attention_deepseek serves. The
+        # (256, 256) entry is GLM-5.3 / GLM-5.2 (qk_nope 192 + qk_rope 64, v 256)
+        # alongside DeepSeek-V3's (128 + 64, 128); vLLM's TRTLLM_RAGGED prefill
+        # backend whitelists both dimension sets. Verified running on SM100.
+        # Without (256, 256) here the harness silently drops trtllm-native from
+        # any GLM-5.3-shaped run and reports the remaining backends unopposed.
+        supported_trtllm_native_head_dims = ((192, 128), (128, 128), (256, 256))
+        if (head_dim_qk, head_dim_vo) not in supported_trtllm_native_head_dims:
             print(
-                "[INFO] trtllm-native backend requires head_dim_qk == 192 and head_dim_vo == 128 or head_dim_qk == 128 and head_dim_vo == 128. Skipping."
+                f"[INFO] trtllm-native backend requires (head_dim_qk, head_dim_vo) in "
+                f"{supported_trtllm_native_head_dims}; got ({head_dim_qk}, {head_dim_vo}). Skipping."
             )
             remove_trtllm_native = True
         if remove_trtllm_native:
