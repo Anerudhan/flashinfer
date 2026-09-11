@@ -46,6 +46,17 @@ Backend choices
                        ``"auto"`` admits it in the measured large-N regions
                        (see ``_top_k_varlen_heuristic``); a ``pre_idx`` is
                        accepted and ignored (the kernel takes no hint).
+``"cudnn"``          — cuDNN DSA indexer top-K
+                       (``cudnn.DSA.indexer_top_k_wrapper``), the selection
+                       stage of DeepSeek Sparse Attention. 8-bit radix,
+                       ``top_k`` in ``(0, 2048]``, fp32/fp16/bf16,
+                       ``compress_ratio == 1`` only, hint-free. Requires
+                       nvidia-cudnn-frontend >= 1.28. **The only backend here
+                       that reaches Hopper with a purpose-built kernel** — every
+                       other one except the ``radix_cutlass`` fallback is
+                       Blackwell-class. Opt-in: ``"auto"`` never selects it
+                       (it is absent from ``_top_k_varlen_heuristic``'s order),
+                       so adding it cannot change an existing ``auto`` choice.
 ``"auto"``           — shape/dtype-aware ranking that tracks the measured
                        per-config winner (see ``_top_k_varlen_heuristic``):
                        gvr_2 for fp32, hinted or hint-free (one tiny
@@ -115,6 +126,26 @@ _GVR_CCS = [100, 103, 107]
 # ``SMEM_CAPACITY_MAP``, so sizing raises before the kernel ever compiles.
 _RADIX_FILTER_CCS = [100, 103, 107]
 
+# cuDNN DSA indexer top-K (``cudnn.DSA.indexer_top_k_wrapper``). The kernel
+# itself gates on SM90+ only, but cuDNN FE's arch map
+# (``deepseek_sparse_attention/utils/compiler.py::_ARCH_MAP``) resolves exactly
+# sm_90a / sm_100a / sm_103a / sm_107a; any other capability raises
+# ``RuntimeError: Unsupported GPU compute capability`` before a kernel is built.
+# Consumer Blackwell (SM120/121) is therefore excluded here rather than
+# discovered at compile time.
+#
+# This is the only backend in this module that reaches Hopper with a
+# purpose-built kernel: ``radix``/``gvr``/``gvr_2``/``radix_filter`` are all
+# Blackwell-class, leaving ``radix_cutlass`` (the masked fallback) as SM90's
+# sole option today.
+_CUDNN_TOPK_CCS = [90, 100, 103, 107]
+
+# cuDNN Frontend release that first ships the DSA top-K wrapper with the
+# ``next_n`` stagger and the (0, 2048] bound relied on below. Kept as a tuple
+# compare rather than a feature probe because the FE exposes no capability
+# query -- the same approach as ``flashinfer/cudnn/prefill.py``.
+_CUDNN_TOPK_MIN_FE = (1, 28)
+
 # ---------------------------------------------------------------------------
 # Backend requirement checkers
 # ---------------------------------------------------------------------------
@@ -156,6 +187,34 @@ def _cute_dsl_ready(device: torch.device) -> bool:
         return False
     major, minor = torch.cuda.get_device_capability(device)
     return _cute_dsl_supports_arch(major, minor)
+
+
+@functools.cache
+def _cudnn_dsa_topk_ready() -> bool:
+    """``True`` when cuDNN FE exposes a usable DSA top-K wrapper.
+
+    Three things have to hold and none of them is implied by the others: the
+    ``cudnn`` package imports, it is new enough to carry the DSA submodule
+    (added well after the ``nvidia-cudnn-frontend`` floor this repo has
+    historically declared), and the top-K symbol resolves. The DSA package
+    loads its symbols lazily through a ``_SYMBOLS`` table, so a plain
+    ``hasattr`` is the cheapest honest probe -- it triggers the import and
+    surfaces a partial install as False instead of at call time.
+    """
+    try:
+        import cudnn
+    except Exception:
+        return False
+    try:
+        major, minor = (int(x) for x in cudnn.__version__.split(".")[:2])
+    except Exception:
+        return False
+    if (major, minor) < _CUDNN_TOPK_MIN_FE:
+        return False
+    try:
+        return hasattr(cudnn.DSA, "indexer_top_k_wrapper")
+    except Exception:
+        return False
 
 
 @supported_compute_capability(_ALL_CCS)
@@ -1404,6 +1463,107 @@ def _radix_filter_top_k_varlen_check(
     return True
 
 
+# cuDNN's IndexerTopK accepts exactly these (``indexer_top_k/api.py``
+# ``_SUPPORTED_DTYPES``); anything else raises inside the wrapper.
+_CUDNN_TOPK_DTYPES = (torch.float32, torch.float16, torch.bfloat16)
+
+
+@supported_compute_capability(_CUDNN_TOPK_CCS)
+def _cudnn_top_k_varlen_check(
+    logits,
+    seq_lens,
+    top_k,
+    pre_idx=None,
+    compress_ratio=1,
+    next_n=1,
+    return_values=False,
+    out_indices=None,
+    out_values=None,
+    backend="auto",
+    load_balance=True,
+    workspace=None,
+):
+    """Return True only when cuDNN's DSA top-K covers this configuration.
+
+    Exclusions, each mirroring a hard constraint in
+    ``cudnn/deepseek_sparse_attention/indexer_top_k/api.py`` rather than a
+    tuning preference, so an explicit ``backend="cudnn"`` fails at backend
+    validation with a readable message instead of deep inside the FE:
+
+    * ``top_k`` outside ``(0, 2048]`` -- the 8-bit radix kernel's
+      ``indexer_topk_max_k`` (api.py:98-101). DSv3.2/GLM-5.3 sit exactly at
+      2048, so the ceiling is met, not cleared.
+    * ``compress_ratio != 1`` -- cuDNN's wrapper has no compression parameter
+      at all, the same hard exclusion ``radix_filter`` makes above.
+    * ``n_rows != seq_lens.numel() * next_n`` -- checked by the wrapper
+      (api.py:109-115) and, unlike the other backends' looser contract, it is
+      the *stagger* relation, not merely a shape.
+
+    ``pre_idx`` is accepted and ignored, as ``radix``, ``radix_cutlass`` and
+    ``radix_filter`` do: the hint is optional steering for the GVR family and
+    never a correctness input.
+    """
+    if not _cudnn_dsa_topk_ready():
+        return False
+    if not 0 < top_k <= 2048:
+        return False
+    if compress_ratio != 1:
+        return False
+    if logits.dtype not in _CUDNN_TOPK_DTYPES:
+        return False
+    if logits.dim() != 2 or seq_lens.dim() != 1:
+        return False
+    # The wrapper asserts this relation; enforcing it here keeps ``auto`` from
+    # routing a batch the kernel would reject.
+    if logits.shape[0] != seq_lens.shape[0] * next_n:
+        return False
+    return True
+
+
+def _run_cudnn(
+    logits,
+    seq_lens,
+    top_k,
+    next_n,
+    compress_ratio,
+    return_values,
+    out_indices,
+    out_values,
+):
+    """Run cuDNN's DSA indexer top-K and land the result in FlashInfer's buffers.
+
+    ``indexer_top_k_wrapper`` allocates its own outputs -- it takes no
+    destination buffers -- so the results are copied into the caller's
+    ``out_indices``/``out_values``. That costs one ``num_rows x top_k`` int32
+    copy (plus the same again in ``logits.dtype`` when values are requested)
+    relative to the backends that write in place. It is kept rather than
+    returning cuDNN's tensors directly because this module's contract is that a
+    caller-supplied buffer *is* the destination: CUDA-graph users capture that
+    address and replay into it, and silently returning a different tensor each
+    call would break replay while appearing to work in eager mode.
+
+    cuDNN manages its own handle and stream internally (the DSA wrappers take a
+    ``stream`` argument, not a handle), so the process-global-handle defect in
+    ``flashinfer/cudnn/{prefill,decode}.py`` has no analogue here. It is given
+    the current stream explicitly so multi-stream callers are correct.
+    """
+    import cudnn
+
+    result = cudnn.DSA.indexer_top_k_wrapper(
+        logits,
+        seq_lens,
+        top_k,
+        next_n=next_n,
+        return_val=bool(return_values),
+        stream=torch.cuda.current_stream(logits.device).cuda_stream,
+    )
+
+    out_indices.copy_(result["indices"])
+    if return_values:
+        out_values.copy_(result["values"])
+    return out_indices, (out_values if return_values else None)
+
+
 def _run_radix_filter(
     logits: torch.Tensor,
     seq_lens: torch.Tensor,
@@ -1486,6 +1646,7 @@ def _run_radix_filter(
         "gvr_2": _gvr2_top_k_varlen_check,
         "radix_cutlass": _radix_cutlass_top_k_varlen_check,
         "radix_filter": _radix_filter_top_k_varlen_check,
+        "cudnn": _cudnn_top_k_varlen_check,
     },
     heuristic_func=_top_k_varlen_heuristic,
 )
@@ -1501,7 +1662,7 @@ def top_k_varlen(
     out_indices: Optional[torch.Tensor] = None,
     out_values: Optional[torch.Tensor] = None,
     backend: Literal[
-        "radix", "gvr", "gvr_2", "radix_cutlass", "radix_filter", "auto"
+        "radix", "gvr", "gvr_2", "radix_cutlass", "radix_filter", "cudnn", "auto"
     ] = "auto",
     load_balance: bool = True,
     workspace: Optional[dict] = None,
@@ -1578,7 +1739,7 @@ def top_k_varlen(
     out_values : torch.Tensor, optional
         Pre-allocated values buffer (same dtype as ``logits``, same layout
         rules as ``out_indices``). Only used when ``return_values=True``.
-    backend : {"radix", "gvr", "gvr_2", "radix_cutlass", "radix_filter", "auto"}, optional
+    backend : {"radix", "gvr", "gvr_2", "radix_cutlass", "radix_filter", "cudnn", "auto"}, optional
         Backend to use.  Default ``"auto"``.
 
         ``"radix"``         — CuTe DSL single-pass multi-CTA radix top-K
@@ -1627,6 +1788,20 @@ def top_k_varlen(
                               accepted and ignored (the kernel takes no
                               hint), as for ``"radix"`` and
                               ``"radix_cutlass"``.
+        ``"cudnn"``         — cuDNN DSA indexer top-K (8-bit radix). SM90 and
+                              datacentre Blackwell (sm_90/100/103/107 — the
+                              capabilities cuDNN FE's DSA arch map resolves);
+                              fp32/fp16/bf16; ``top_k`` in [1, 2048];
+                              ``compress_ratio == 1`` only; ``pre_idx``
+                              accepted and ignored. Needs
+                              nvidia-cudnn-frontend >= 1.28. Unlike the
+                              in-place backends it copies cuDNN's freshly
+                              allocated results into ``out_indices`` /
+                              ``out_values`` (the FE wrapper takes no
+                              destination buffers), so caller buffers stay
+                              address-stable for CUDA-graph replay at the cost
+                              of one extra ``num_rows x top_k`` copy. Never
+                              chosen by ``"auto"``.
         ``"auto"``          — shape/dtype-aware selection tracking the
                               measured per-config winner: gvr_2 for fp32,
                               hinted or hint-free (except hint-free
@@ -1959,10 +2134,21 @@ def top_k_varlen(
             out_indices,
             out_values,
         )
+    elif backend == "cudnn":
+        out_i, out_v = _run_cudnn(
+            logits,
+            seq_lens,
+            top_k,
+            next_n,
+            compress_ratio,
+            return_values,
+            out_indices,
+            out_values,
+        )
     else:
         raise ValueError(
-            f"Unknown backend: {backend!r}. "
-            f"Expected 'radix', 'gvr', 'gvr_2', 'radix_cutlass', or 'radix_filter'."
+            f"Unknown backend: {backend!r}. Expected 'radix', 'gvr', 'gvr_2', "
+            f"'radix_cutlass', 'radix_filter', or 'cudnn'."
         )
 
     return out_i, out_v
