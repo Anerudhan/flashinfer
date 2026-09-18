@@ -27,15 +27,81 @@ ARM_LABELS = {
     "mega_deepep_native": ("DeepEP MegaMoE", "DeepEP LL"),
 }
 
+ARM_LABELS.update(
+    {
+        # SGLang arms (run_sg_matrix.sh)
+        "sg_split_cutedsl_fia2a": ("cuTeDSL split", "FlashInfer all2all"),
+        "sg_split_cutedsl_nixl": ("cuTeDSL split", "NIXL EP"),
+        "sg_split_cutedsl_deepep": ("cuTeDSL split", "DeepEP"),
+        "sg_trtllm_routed_fia2a": ("TRTLLM routed", "FlashInfer all2all"),
+        "sg_trtllm_routed_nixl": ("TRTLLM routed", "NIXL EP"),
+        "sg_trtllm_routed_deepep": ("TRTLLM routed", "DeepEP"),
+        "sg_megamoe": ("FI MegaMoE (cuTeDSL)", "fused (in-kernel)"),
+        "sg_megamoe_ikr": ("FI MegaMoE +ikr", "fused (in-kernel)"),
+        "sg_megamoe_cmb_nvfp4": ("FI MegaMoE +cmb nvfp4", "fused (in-kernel)"),
+        "sg_megamoe_cmb_mxfp8": ("FI MegaMoE +cmb mxfp8", "fused (in-kernel)"),
+    }
+)
+
 FNAME_RE = re.compile(
     r"^(?P<model>pro|flash)_(?P<arm>[a-z0-9_]+)_ep(?P<ep>\d+)"
     r"_conc(?P<conc>\d+)_mnbt(?P<mnbt>\d+)\.json$"
 )
 
+# SGLang: sg_<model>_<arm>_ep<N>_conc<C>.jsonl (bench_serving --output-file)
+SG_FNAME_RE = re.compile(
+    r"^sg_(?P<model>pro|flash)_(?P<arm>[a-z0-9_]+)_ep(?P<ep>\d+)"
+    r"_conc(?P<conc>\d+)\.jsonl$"
+)
+
+
+def _load_sglang(path, info):
+    """SGLang bench_serving appends one JSON object per run; take the last."""
+    last = None
+    with open(path) as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                last = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+    if last is None:
+        return None
+    ngpu = int(info["ep"])
+    tok_s = last.get(
+        "total_token_throughput",
+        last.get("output_throughput", 0.0) + last.get("input_throughput", 0.0),
+    )
+    return {
+        "model": info["model"],
+        "arm": info["arm"],
+        "compute": ARM_LABELS.get(info["arm"], (info["arm"], "?"))[0],
+        "transport": ARM_LABELS.get(info["arm"], ("?", "?"))[1],
+        "ep": ngpu,
+        "conc": int(info["conc"]),
+        "mnbt": 0,
+        "completed": last.get("completed", 0),
+        "tok_s": tok_s,
+        "tok_s_gpu": tok_s / ngpu,
+        "ttft_ms": last.get("median_ttft_ms", 0.0),
+        "tpot_ms": last.get("median_tpot_ms", 0.0),
+        "itl_ms": last.get("median_itl_ms", 0.0),
+        "gsm8k": None,
+    }
+
 
 def load_rows(result_dirs):
     rows = []
     for d in result_dirs:
+        for path in sorted(glob.glob(os.path.join(d, "*.jsonl"))):
+            m = SG_FNAME_RE.match(os.path.basename(path))
+            if not m:
+                continue
+            row = _load_sglang(path, m.groupdict())
+            if row is not None:
+                rows.append(row)
         for path in sorted(glob.glob(os.path.join(d, "*.json"))):
             base = os.path.basename(path)
             if base.endswith(".gsm8k.json"):
