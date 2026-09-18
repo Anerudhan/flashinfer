@@ -237,6 +237,25 @@ Worth reporting upstream.
 Consequence: the cuTeDSL-split × NIXL cell is not measurable in vLLM
 0.29.0. cuTeDSL split × FlashInfer all2all and × DeepEP are.
 
+**`flashinfer_moe_ep_mega_deep_gemm` needs a standalone DeepGEMM; the native
+mega path does not.** On the stock vLLM image the FlashInfer deep_gemm mega
+arm aborts with `ModuleNotFoundError: No module named 'deep_gemm'`, while the
+*native* `deep_gemm_mega_moe` arm comes up normally on the same image:
+
+```
+INFO [deep_gemm.py:186] deep_gemm not found in site-packages,
+                        trying vendored vllm.third_party.deep_gemm
+INFO [deep_gemm.py:213] DeepGEMM PDL enabled on vllm.third_party.deep_gemm.
+```
+
+vLLM vendors a DeepGEMM fallback and its own mega path uses it; FlashInfer's
+backend does a hard top-level `import deep_gemm` and does not consult the
+vendored module. This is an integration gap rather than a capability gap —
+worth fixing upstream so the FlashInfer backend reuses
+`vllm.third_party.deep_gemm` when the standalone package is absent. Measured
+here by layering a real DeepGEMM into the image
+(`vllm-0.29.0-deepgemm-arm64.sqsh`).
+
 **FlashInfer all2all is not a `moe_ep` comm backend.** `moe_ep` ships exactly
 two split transports, `nccl_ep` and `nixl_ep`
 (`flashinfer/moe_ep/backends/split/comm/`). The FlashInfer all2all used here
