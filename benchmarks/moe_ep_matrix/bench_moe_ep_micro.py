@@ -27,6 +27,15 @@ config above except ``megamoe_deepgemm`` (DeepGEMM's mega kernel is
 precision each config ran at is emitted in the ``precision`` CSV column rather
 than assumed. ``--quant`` forces a common precision for an apples-to-apples row.
 
+CUDA graphs: only the **megakernel** configs are captured. The split EP
+transports (NCCL-EP, NIXL-EP, and MNNVL all2all) perform host-visible work
+inside dispatch and throw from C++ under stream capture —
+``CUDA error nccl_ep.cc:2021 'operation not permitted when stream is
+capturing'`` — which reaches ``std::terminate`` and SIGABRTs every rank. That
+is not catchable from Python, so capture is *gated* on a per-config
+``capturable`` flag rather than attempted inside a ``try``. The ``graph``
+column records what each cell actually used.
+
 Transport availability is probed at runtime via
 ``flashinfer.moe_ep.available_backends()``; a transport the build lacks is
 reported per cell with its reason rather than silently skipped. Note that
@@ -133,6 +142,12 @@ class Config:
     comm: str  # "fia2a" | "nccl_ep" | "nixl_ep" | "fused"
     compute: str  # "cutedsl" | "trtllm" | "nvfp4_cutedsl" | "deep_gemm_mega"
     precision: str  # nominal; the runner records what actually ran
+    # CUDA-graph capture is GATED, not attempted-and-caught: the split EP
+    # transports throw a C++ EPException from inside dispatch under capture
+    # ("operation not permitted when stream is capturing"), which calls
+    # std::terminate and SIGABRTs the whole process. Python cannot catch it,
+    # so a non-capturable config must never be offered to the capture path.
+    capturable: bool = False
 
 
 CONFIGS = {
@@ -144,8 +159,17 @@ CONFIGS = {
         Config("trtllm_nccl", "split", "nccl_ep", "trtllm", "W4A4"),
         Config("cutedsl_nixl", "split", "nixl_ep", "cutedsl", "W4A4"),
         Config("trtllm_nixl", "split", "nixl_ep", "trtllm", "W4A4"),
-        Config("megamoe_cutedsl", "mega", "fused", "nvfp4_cutedsl", "W4A4"),
-        Config("megamoe_deepgemm", "mega", "fused", "deep_gemm_mega", "W4A8"),
+        Config(
+            "megamoe_cutedsl", "mega", "fused", "nvfp4_cutedsl", "W4A4", capturable=True
+        ),
+        Config(
+            "megamoe_deepgemm",
+            "mega",
+            "fused",
+            "deep_gemm_mega",
+            "W4A8",
+            capturable=True,
+        ),
     )
 }
 
@@ -175,8 +199,9 @@ def _parse_args() -> argparse.Namespace:
         "--cuda-graph",
         choices=["auto", "on", "off"],
         default="auto",
-        help="auto: capture only for decode-sized token counts, where launch "
-        "overhead dominates; falls back to eager if capture fails",
+        help="auto: capture only for decode-sized token counts of CAPTURABLE "
+        "configs (the megakernels). The split EP transports abort the process "
+        "under capture, so they are never captured regardless of this flag.",
     )
     p.add_argument(
         "--graph-max-tokens",
@@ -700,9 +725,12 @@ def main() -> int:
             if layer is not None:
                 try:
                     t = make_tensors(geo, n, dev)
-                    use_graph = args.cuda_graph == "on" or (
+                    want_graph = args.cuda_graph == "on" or (
                         args.cuda_graph == "auto" and n <= args.graph_max_tokens
                     )
+                    # Never hand a non-capturable config to the capture path:
+                    # it aborts the process rather than raising (see Config).
+                    use_graph = want_graph and cfg.capturable
                     us, used = time_forward(
                         layer,
                         t,
