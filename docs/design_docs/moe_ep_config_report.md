@@ -744,7 +744,7 @@ Each point sits **inside** the requested range for its scenario and was
 checked against the measured 723,667-token KV budget per rank (§2.1) so that
 the requested concurrency actually fits rather than silently queueing:
 
-| Scenario | requested ISL / OSL / batch | measured point (ISL / OSL / conc) | prompts | max_model_len | KV-feasible conc |
+| Scenario | requested ISL / OSL / batch | measured point (ISL / OSL / batch) | prompts | max_model_len | KV-feasible batch |
 |---|---|---|---:|---:|---:|
 | Chat / interactive | 128–1K / 128–1K / 64–128 | 1024 / 1024 / 128 | 512 | 2,304 | ~314 |
 | RAG | 2K–8K / 256–1K / 32–64 | 8192 / 1024 / 64 | 256 | 9,472 | ~76 |
@@ -752,6 +752,21 @@ the requested concurrency actually fits rather than silently queueing:
 | Code generation | 1K–4K / 512–2K / 8–16 | 4096 / 2048 / 16 | 64 | 6,400 | ~113 |
 | Agentic | 4K–64K / 1K–16K / 16–64 | 16384 / 4096 / 32 | 128 | 20,736 | ~34 |
 | Reasoning | 512–4K / 2K–16K / 8–16 | 4096 / 16384 / 16 | 64 | 20,736 | ~34 |
+
+**Batch vs concurrency — what is actually pinned.** These are two different
+knobs and the distinction matters for reading the table. `--max-concurrency`
+is a *client* cap on in-flight requests; it only bounds the batch from above.
+The server-side running batch — how many sequences the scheduler actually
+puts in one forward — is `--max-num-seqs`. The two coincide only in
+steady-state decode with enough KV, and they diverge during prefill (at
+`--max-num-batched-tokens 2048`, an ISL-16384 request takes 8 chunks, so the
+instantaneous batch is far below the concurrency cap).
+
+Every run in this section pins **both** to the scenario's batch
+(`--max-num-seqs = --max-concurrency = batch`), so the "batch" column is the
+server-side batch and not merely an offered-load ceiling. Results are tagged
+`conc<N>b<BATCH>` so a re-run at a different batch cannot silently overwrite
+one at the same concurrency.
 
 **Agentic is deliberately not run at the top of its range.** ISL 64K + OSL
 16K needs `max_model_len` 81,920, which the KV budget only supports at ~8

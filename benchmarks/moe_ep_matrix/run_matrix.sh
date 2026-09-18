@@ -11,6 +11,11 @@ CONC=${CONC:-256}
 NPROMPTS=${NPROMPTS:-512}
 ISL=${ISL:-8192}
 OSL=${OSL:-1024}
+# Server-side running batch. --max-concurrency is a *client* cap on
+# in-flight requests and only bounds the batch from above; --max-num-seqs
+# is what actually caps how many sequences the scheduler runs together.
+# Default to CONC so the two agree unless explicitly separated.
+BATCH=${BATCH:-$CONC}
 MODE=${MODE:-perf}          # perf | acc | both
 PORT=8888
 EP=${EP:-4}
@@ -97,7 +102,7 @@ run_arm () {
   # eager number in the same comparison group as a cuda-graph-captured one.
   local MNBT_TAG=$MNBT
   [ "${EAGER:-0}" = 1 ] && MNBT_TAG="${MNBT}eager"
-  local TAG="${MODEL}_${ARM}_ep${EP}_conc${CONC}_mnbt${MNBT_TAG}"
+  local TAG="${MODEL}_${ARM}_ep${EP}_conc${CONC}b${BATCH}_mnbt${MNBT_TAG}"
 
   echo
   echo "########## ARM=$ARM model=$MODEL backend=$BACKEND all2all=${A2A} ckpt=$(basename $MPATH)"
@@ -127,6 +132,7 @@ run_arm () {
     --tokenizer-mode deepseek_v4 --tool-call-parser deepseek_v4 --enable-auto-tool-choice
     --reasoning-parser deepseek_v4 --attention_config.use_fp4_indexer_cache True
     --max-model-len $((ISL+OSL+256)) --max-num-batched-tokens $MNBT
+    --max-num-seqs $BATCH
     "${GRAPH_ARGS[@]}"
     --gpu-memory-utilization ${GPU_MEM_UTIL:-0.92})
 

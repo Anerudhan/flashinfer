@@ -47,7 +47,9 @@ ARM_LABELS.update(
 
 FNAME_RE = re.compile(
     r"^(?P<model>pro|flash)_(?P<arm>[a-z0-9_]+)_ep(?P<ep>\d+)"
-    r"_conc(?P<conc>\d+)_mnbt(?P<mnbt>\d+)(?P<eager>eager)?\.json$"
+    # b<BATCH> is optional: results predating --max-num-seqs pinning do
+    # not carry it.
+    r"_conc(?P<conc>\d+)(?:b(?P<batch>\d+))?_mnbt(?P<mnbt>\d+)(?P<eager>eager)?\.json$"
 )
 
 # SGLang: sg_<model>_<arm>_ep<N>_conc<C>.jsonl (bench_serving --output-file)
@@ -84,6 +86,7 @@ def _load_sglang(path, info):
         "ep": ngpu,
         "conc": int(info["conc"]),
         "mnbt": 0,
+        "batch": None,
         "eager": False,
         "completed": last.get("completed", 0),
         "tok_s": tok_s,
@@ -141,6 +144,7 @@ def load_rows(result_dirs):
                     "transport": ARM_LABELS.get(info["arm"], ("?", "?"))[1],
                     "ep": ngpu,
                     "conc": int(info["conc"]),
+                    "batch": int(info["batch"]) if info.get("batch") else None,
                     # eager runs get a distinct group key so they never share a
                     # comparison group with cuda-graph-captured runs
                     "mnbt": int(info["mnbt"]) + (10**6 if info.get("eager") else 0),
