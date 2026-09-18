@@ -462,7 +462,25 @@ _Pending._
 
 ### 5.4 Correctness (GSM8K)
 
-_Pending._
+Run against the *same* server process that produced the throughput number
+for that arm, so an arm cannot post a fast time on a broken kernel.
+200 questions, 5-shot-style prompting via `/v1/chat/completions`.
+
+| Model | Configuration | GSM8K |
+|---|---|---:|
+| V4-Flash | TRTLLM routed + FlashInfer all2all | 0.875 |
+| V4-Flash | Native MegaMoE (deep_gemm) | 0.870 |
+
+Both clear the ≥0.80 gate used by the earlier EP work and sit within noise of
+each other, so the 6.7% throughput gap in §5.2 is a genuine performance
+difference and not one arm cutting numerical corners. Arms that never reached
+`ready` have no accuracy number by construction — they are marked N/A, not
+zero.
+
+Every cell reported in §5.1–5.3 additionally passed the harness's two
+structural gates: the port must be free before the arm starts (else a stale
+server from the previous arm would answer), and a result with
+`completed == 0` is rejected even when every exit code was 0.
 
 ---
 
