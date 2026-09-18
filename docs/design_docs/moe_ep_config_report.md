@@ -68,7 +68,7 @@ Measured at `--gpu-memory-utilization 0.92`, EP=4:
 | Model | ckpt size | KV per rank | max concurrency @ 9,472 tok/req |
 |---|---|---|---|
 | V4-Pro (NVFP4) | 851 GB | 47,316 tok | **5.0×** |
-| V4-Flash (NVFP4) | 157 GB | _measuring_ | _measuring_ |
+| V4-Flash (NVFP4) | 157 GB | 723,667 tok | **76.4×** |
 
 V4-Pro's weights consume nearly the whole node at EP=4, so a single GB300
 node can only hold ~5 concurrent 9.4k-token requests. That confines V4-Pro
@@ -77,10 +77,10 @@ SGLang PR reports `flashinfer_trtllm_routed` beating MegaMoE on latency, and
 so it cannot show the crossover. To probe the large-batch regime on V4-Pro
 the weights must be spread wider (EP=8 over two nodes, ~8× the KV headroom).
 
-V4-Flash's checkpoint is 5.4× smaller, so at EP=4 on a single GB200 node it
-has ample KV and can carry the full concurrency sweep. V4-Flash therefore
-provides the headline crossover curve, and V4-Pro provides the
-large-model datapoint.
+V4-Flash's checkpoint is 5.4× smaller and its measured KV headroom is **15×
+larger** (76.4× vs 5.0× concurrency), so at EP=4 on a single GB200 node it
+carries the full concurrency sweep. V4-Flash therefore provides the headline
+crossover curve, and V4-Pro provides the large-model datapoint.
 
 Parallelism for every cell: `--data-parallel-size 4 --tensor-parallel-size 1
 --enable-expert-parallel` (i.e. DP-attention + EP=4). This matters: vLLM only
