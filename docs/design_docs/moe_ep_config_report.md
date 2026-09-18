@@ -751,6 +751,7 @@ the requested batch actually fits rather than silently queueing:
 | Summarization | 4K–16K / 512–1K / 8–16 | 16384 / 1024 / 16 | 64 | 17,664 | ~41 |
 | Code generation | 1K–4K / 512–2K / 8–16 | 4096 / 2048 / 16 | 64 | 6,400 | ~113 |
 | Agentic | 4K–64K / 1K–16K / 16–64 | 16384 / 4096 / 32 | 128 | 20,736 | ~34 |
+| Agentic (long) | 4K–64K / 1K–16K / 16–64 | 32768 / 4096 / 16 | 64 | 37,120 | ~19 |
 | Reasoning | 512–4K / 2K–16K / 8–16 | 4096 / 16384 / 16 | 64 | 20,736 | ~34 |
 
 **Batch vs concurrency — what is actually pinned.** These are two different
@@ -768,20 +769,27 @@ server-side batch and not merely an offered-load ceiling. Results are tagged
 `conc<N>b<BATCH>` so a re-run at a different batch cannot silently overwrite
 one at the same concurrency.
 
-**Agentic is deliberately not run at the top of its range.** ISL 64K + OSL
-16K needs `max_model_len` 81,920, which the KV budget only supports at a
-batch of ~8 — below the requested 16–64, so the run would measure queueing
-rather than the MoE backend. ISL 16K / OSL 4K / batch 32 is inside
-every requested range *and* KV-feasible. Probing the true 64K end needs EP=8
-over two nodes (§7).
+**Agentic gets two points, and still not the top of its range.** The pair
+32K/4K/16 and 16K/4K/32 holds OSL fixed and trades ISL against batch, which
+isolates how each backend responds to prompt length at constant output
+length — the axis that matters most for agentic traffic.
+
+The top of the range remains out of reach on one node: ISL 64K + OSL 16K
+needs `max_model_len` 81,920, which the KV budget only supports at a batch of
+~8 — below the requested 16–64, so it would measure queueing rather than the
+MoE backend. Even 32K/4K is batch-limited: at `max_model_len` 37,120 the
+723,667-token budget allows ~19, so batch 16 (≈82% of KV) is the largest
+power-of-two that fits and batch 32 would not. Probing the true 64K end needs
+EP=8 over two nodes (§7).
 
 The Chat point additionally runs GSM8K, which closes the one correctness gap
 in §5.4 (cuTeDSL split had no accuracy number).
 
 ### 8.3 Results
 
-_Runs in flight (lyris jobs 3095650–3095655, one per scenario, three arms
-each). Populated from `collect_matrix.py` as they land._
+_Runs in flight (lyris jobs 3095650–3095655 plus 3095668 for the long
+agentic point, three arms each). Populated from `collect_matrix.py` as they
+land._
 
 | Scenario | Backend | tok/s | tok/s/GPU | TTFT ms | TPOT ms | ITL ms | vs MegaMoE |
 |---|---|---|---|---|---|---|---|
