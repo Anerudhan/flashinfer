@@ -579,23 +579,58 @@ Support result already established: `flashinfer_trtllm_routed` + `deepep` is
 MoeRunnerBackend.FLASHINFER_TRTLLM_ROUTED requires a fused func for a2a
 backend deepep, but none is registered.`
 
-**SGLang serving comes up correctly; its throughput numbers are not in this
-revision.** `sg_megamoe` reaches
+#### 5.3a SGLang throughput — the ranking inverts vs vLLM
+
+ISL 8192 / OSL 1024, `max_concurrency 256`, 512 prompts, SGLang defaults
+(cuda-graph enabled).
+
+| Compute | Transport | done | tok/s | tok/s/GPU | TTFT ms | TPOT ms | ITL ms | vs FI Mega |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| **cuTeDSL split** | FlashInfer all2all | 512 | **45,860** | 11,465 | 4,465 | 40.7 | 12.7 | **1.226×** |
+| TRTLLM routed | FlashInfer all2all | 512 | 43,333 | 10,833 | 3,656 | 45.7 | 12.3 | 1.158× |
+| FI MegaMoE (cuTeDSL) | fused (in-kernel) | 512 | 37,419 | 9,355 | 3,707 | 52.4 | 18.9 | 1.000× |
+
+**This is the opposite ordering to vLLM.** Under vLLM the fused megakernel
+led the split paths by ~1.17× (§5.2); under SGLang it is the *slowest* of the
+three, losing by 1.16–1.23×, and is worse on every latency metric
+(TPOT 52.4 vs 40.7/45.7 ms, ITL 18.9 vs 12.7/12.3 ms).
+
+Read this as a **within-framework** statement. Absolute tok/s is not
+comparable across the two frameworks here — they differ in scheduler,
+chunked-prefill and cuda-graph capture defaults, and this study did not
+normalise them. What *is* comparable is the ordering inside each framework,
+and the orderings disagree. Combined with §5.2c (where the ordering also
+inverts between captured and eager inside vLLM), the conclusion is that
+**"MegaMoE is faster than the split path" is not a portable claim** — it
+depends on the host framework and on cuda-graph capture, and the headline
+1.17× from §5.2 should always be quoted with both.
+
+One arm failed for an unrelated reason: `sg_split_cutedsl_deepep` serves
+(ready in 150 s) but its benchmark warmup aborts with
+`aiohttp.http_exceptions.TransferEncodingError: 400` — a server-side 400
+during warmup rather than a configuration refusal. Not chased further.
+
+#### 5.3b Getting SGLang to run at all
+
+`sg_megamoe` reaches
 `The server is fired up and ready to roll!` (ready after 560 s, 16.47M-token
 KV pool, weights loaded as `quant=fp8, quant_algo=MIXED_PRECISION` with NVFP4
-experts), so the *serving path* is validated. But
-`sglang.bench_serving` then exits non-zero against an
-`huggingface_hub.errors.LocalEntryNotFoundError` even with `--model` and
-`--tokenizer` pointed at the local checkpoint directory, on compute nodes
-that have no egress and run `HF_HUB_OFFLINE=1`. The checkpoint itself is not
-at fault — it ships `tokenizer.json` / `tokenizer_config.json`, declares
-`tokenizer_class: PreTrainedTokenizerFast`, and has no `auto_map` remote-code
-reference — so something else inside `bench_serving` reaches for the Hub.
-Resolving that is a harness issue, not a MoE-EP result, and is the one
-outstanding item.
+experts).
 
-What SGLang *did* contribute to this report is the support/configuration
-evidence above (§3.4, §3.4b), which is independent of the benchmark client.
+Three prerequisites had to be met before any SGLang arm produced a number;
+all three cost a debugging cycle and are worth knowing up front:
+
+1. **Dispatch capacity.** `SGLANG_FLASHINFER_NUM_MAX_DISPATCH_TOKENS_PER_RANK
+   × ep_size` must cover the largest CuteDSL MoE forward — `max_prefill_tokens`,
+   16384 by default. The stock 1024/rank yields only 4096 at EP=4 and every
+   `flashinfer_cutedsl` arm refuses to start. 4096/rank is the minimum at EP=4.
+2. **The `random` dataset is not self-contained.**
+   `sglang/benchmark/datasets/random.py` samples its length distribution from
+   ShareGPT and fetches it via `hf_hub_download`, which dies with
+   `OfflineModeIsEnabled` on egress-less compute nodes. Neither the model nor
+   the tokenizer is involved — both resolve locally. Stage
+   `anon8231489123/ShareGPT_Vicuna_unfiltered` and pass `--dataset-path`.
+3. **Offline tokenizer.** Pass `--model`/`--tokenizer` as local paths.
 
 ### 5.4 Correctness (GSM8K)
 
