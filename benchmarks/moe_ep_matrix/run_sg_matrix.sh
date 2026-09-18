@@ -123,7 +123,10 @@ run_arm () {
         --model "$MPATH" --tokenizer "$MPATH" \
         --dataset-name random --random-input-len $ISL --random-output-len $OSL \
         --random-range-ratio 0.8 --num-prompts $NPROMPTS --max-concurrency $CONC \
-        --output-file "$OUT/${TAG}.jsonl" 2>&1 | tail -18 || rc=1
+        --output-file "$OUT/${TAG}.jsonl" > "$OUT/${TAG}.bench.log" 2>&1 || rc=1
+    # Keep the whole client log: piping through `tail` truncates the traceback
+    # that explains a non-zero exit, which cost a debugging cycle already.
+    tail -25 "$OUT/${TAG}.bench.log"
   else
     echo "  ARM $ARM NEVER READY"; tail -30 "$OUT/${TAG}.server.log"; rc=7
   fi
