@@ -33,12 +33,13 @@ FlashInfer all2all. NIXL-EP and DeepEP-**low-latency** both require the
 implement, and the server refuses at init. DeepEP-**high-throughput** clears
 that gate but then dies inside CUDA-graph capture
 (`DeepEP error: CPU recv timeout`), so it is only measurable in eager mode.
-SGLang reaches the identical conclusion independently: both `nixl` and
-`deepep` are refused for `flashinfer_trtllm_routed` with
-*"requires a fused func for a2a backend &lt;x&gt;, but none is registered."*
-NCCL-EP is not exposed by either framework at all. So **on both frameworks
-the FlashInfer split runners have exactly one usable transport — FlashInfer
-all2all.** Full support table: §3.4b.
+SGLang refuses both `nixl` and `deepep` for `flashinfer_trtllm_routed` with
+*"requires a fused func for a2a backend &lt;x&gt;, but none is registered."* —
+but **does** support `flashinfer_cutedsl` + `deepep`. NCCL-EP is exposed by
+neither framework. So support is decided **per (runner, transport) pair**,
+not per runner: in vLLM every FlashInfer split runner is down to FlashInfer
+all2all alone, while in SGLang cuTeDSL keeps DeepEP and TRTLLM-routed does
+not. Full support table: §3.4b.
 
 **0.2 Fusing the communication into the kernel is worth ~1.17×.** On
 V4-Flash (GB200, EP=4, ISL 8192 / OSL 1024, conc 256), both megakernels beat
@@ -221,9 +222,15 @@ completion, ✗ = refused at init, — = not applicable):
 
 | `--moe-runner-backend` | `flashinfer` | `nixl` | `deepep` | `flashinfer_megamoe` |
 |---|---|---|---|---|
-| `flashinfer_cutedsl` | ✅ serves¹ | ✗ no fused func | ✗ no fused func | — |
+| `flashinfer_cutedsl` | ✅ serves¹ | ✗ no fused func | **✅ serves¹** | — |
 | `flashinfer_trtllm_routed` | ✅ serves¹ | ✗ no fused func | ✗ no fused func | — |
 | `flashinfer_megamoe` | — | — | — | ✅ serves¹ (required pairing) |
+
+Note the asymmetry: **SGLang's cuTeDSL split runner _does_ pair with DeepEP**
+(server ready in 150 s), while its TRTLLM-routed runner does not. So the
+sparsity is per-(runner, transport) pair, not a blanket property of the
+FlashInfer runners — SGLang has registered a cuTeDSL×DeepEP fused func and
+not the others.
 
 ¹ "serves" = the server reaches
 `The server is fired up and ready to roll!`. SGLang throughput numbers are
@@ -249,10 +256,15 @@ same thing in two vocabularies:
   a fused func for a2a backend deepep, but none is registered.`
 
 In both cases the transport dictates an activation layout (batched vs
-standard) and the MoE kernel must have an implementation for that layout.
-A "try every kernel with every transport" sweep is therefore not a
-meaningful experiment design on today's stack — the honest matrix is the
-support table above plus performance for the cells that exist.
+standard) and the MoE kernel must have an implementation registered for that
+layout. Support is therefore decided per (runner, transport) **pair** — the
+same runner can be supported on one framework's DeepEP and refused on the
+other's, as `flashinfer_cutedsl` is (✅ under SGLang `deepep`, ✗ under vLLM
+`deepep_low_latency`).
+
+A "try every kernel with every transport" sweep is consequently not a
+meaningful experiment design on today's stack — the honest deliverable is
+the support table above plus performance for the cells that exist.
 
 ### 3.5 Axes that do not exist as posed — and why
 
