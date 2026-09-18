@@ -742,7 +742,7 @@ DeepSeek-V4-Flash, GB200, EP=4, `--gpu-memory-utilization 0.92`,
 
 Each point sits **inside** the requested range for its scenario and was
 checked against the measured 723,667-token KV budget per rank (§2.1) so that
-the requested concurrency actually fits rather than silently queueing:
+the requested batch actually fits rather than silently queueing:
 
 | Scenario | requested ISL / OSL / batch | measured point (ISL / OSL / batch) | prompts | max_model_len | KV-feasible batch |
 |---|---|---|---:|---:|---:|
@@ -769,9 +769,9 @@ server-side batch and not merely an offered-load ceiling. Results are tagged
 one at the same concurrency.
 
 **Agentic is deliberately not run at the top of its range.** ISL 64K + OSL
-16K needs `max_model_len` 81,920, which the KV budget only supports at ~8
-concurrent — below the requested batch of 16–64, so the run would measure
-queueing rather than the MoE backend. ISL 16K / OSL 4K / conc 32 is inside
+16K needs `max_model_len` 81,920, which the KV budget only supports at a
+batch of ~8 — below the requested 16–64, so the run would measure queueing
+rather than the MoE backend. ISL 16K / OSL 4K / batch 32 is inside
 every requested range *and* KV-feasible. Probing the true 64K end needs EP=8
 over two nodes (§7).
 
@@ -780,7 +780,7 @@ in §5.4 (cuTeDSL split had no accuracy number).
 
 ### 8.3 Results
 
-_Runs in flight (lyris jobs 3095612–3095617, one per scenario, three arms
+_Runs in flight (lyris jobs 3095650–3095655, one per scenario, three arms
 each). Populated from `collect_matrix.py` as they land._
 
 | Scenario | Backend | tok/s | tok/s/GPU | TTFT ms | TPOT ms | ITL ms | vs MegaMoE |
@@ -797,6 +797,6 @@ uniform. Three things to look for:
 2. **Does it hold at decode-heavy shapes?** Reasoning (OSL 16384) is almost
    entirely decode, which is where §5.2 located the megakernel's advantage —
    so it should be the megakernel's best case.
-3. **Does it hold at low concurrency?** Summarization / codegen / reasoning
-   run conc 16 against §5.2's 256. The SGLang PR's claim that
+3. **Does it hold at small batch?** Summarization / codegen / reasoning
+   run batch 16 against §5.2's 256. The SGLang PR's claim that
    `trtllm_routed` wins at low concurrency is directly testable here.
