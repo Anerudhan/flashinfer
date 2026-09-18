@@ -118,9 +118,15 @@ run_arm () {
     # --model/--tokenizer must be the LOCAL checkpoint path: the compute nodes
     # run with HF_HUB_OFFLINE=1 and no egress, so letting bench_serving resolve
     # the tokenizer from the Hub fails with LocalEntryNotFoundError.
+    # SGLang's `random` dataset still samples length distributions from
+    # ShareGPT, which it fetches from the Hub -- that download, not the model
+    # or tokenizer, is what fails on egress-less compute nodes
+    # (OfflineModeIsEnabled on
+    # anon8231489123/ShareGPT_Vicuna_unfiltered). Point it at a local copy.
     python3 -m sglang.bench_serving --backend sglang \
         --host 127.0.0.1 --port $PORT \
         --model "$MPATH" --tokenizer "$MPATH" \
+        --dataset-path "${SHAREGPT_PATH:-$ROOT/sharegpt/ShareGPT_V3_unfiltered_cleaned_split.json}" \
         --dataset-name random --random-input-len $ISL --random-output-len $OSL \
         --random-range-ratio 0.8 --num-prompts $NPROMPTS --max-concurrency $CONC \
         --output-file "$OUT/${TAG}.jsonl" > "$OUT/${TAG}.bench.log" 2>&1 || rc=1
