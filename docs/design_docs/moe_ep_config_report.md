@@ -459,9 +459,30 @@ Three things fall out of this table:
    it is the reverse of what the FlashInfer MegaMoE integration is aiming
    for, and the gap is decode-latency-shaped.
 
-### 5.3 SGLang cross-check
+### 5.3 SGLang cross-check (DeepSeek-V4-Flash, GB200 EP=4)
 
-_Pending._
+SGLang matters here for two reasons: it is the framework the reference PR
+(#31470) targets, and its a2a enum exposes `nixl`, which vLLM could not use
+with any FlashInfer runner.
+
+Two configuration requirements had to be met before any arm would start, both
+worth documenting for anyone reproducing this:
+
+1. **Dispatch capacity.** `SGLANG_FLASHINFER_NUM_MAX_DISPATCH_TOKENS_PER_RANK
+   × ep_size` must cover the largest CuteDSL MoE forward — i.e.
+   `max_prefill_tokens`, 16384 by default. The stock 1024/rank yields only
+   4096 at EP=4 and every `flashinfer_cutedsl` arm refuses to start. 4096/rank
+   is the minimum that works at EP=4.
+2. **Offline tokenizer.** `sglang.bench_serving` must be given
+   `--model`/`--tokenizer` as local paths; otherwise it tries the Hub and dies
+   with `LocalEntryNotFoundError` on compute nodes that have no egress.
+
+Support result already established: `flashinfer_trtllm_routed` + `deepep` is
+**not implemented** — `NotImplementedError: Runner backend
+MoeRunnerBackend.FLASHINFER_TRTLLM_ROUTED requires a fused func for a2a
+backend deepep, but none is registered.`
+
+_Throughput table pending — arms in flight._
 
 ### 5.4 Correctness (GSM8K)
 
