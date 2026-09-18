@@ -44,6 +44,12 @@ arm_spec () {
     split_trtllm_fia2a)   echo "flashinfer_trtllm flashinfer_all2allv nvfp4" ;;
     split_trtllm_nixl)    echo "flashinfer_trtllm nixl_ep nvfp4" ;;
     split_trtllm_deepep)  echo "flashinfer_trtllm deepep_low_latency nvfp4" ;;
+    # DeepEP low-latency and NIXL-EP both select the batched_experts
+    # activation format, which the FlashInfer NVFP4 split kernels do not
+    # implement. DeepEP high-throughput uses the standard format, so it is
+    # the only DeepEP variant these runners can pair with.
+    split_cutedsl_deepep_ht) echo "flashinfer_cutedsl deepep_high_throughput nvfp4" ;;
+    split_trtllm_deepep_ht)  echo "flashinfer_trtllm deepep_high_throughput nvfp4" ;;
     mega_fi_cutedsl)      echo "flashinfer_moe_ep_mega_cutedsl - nvfp4" ;;
     mega_fi_deepgemm)     echo "flashinfer_moe_ep_mega_deep_gemm - base" ;;
     # Native (non-FlashInfer) megakernel. NOTE: mega backends bypass the

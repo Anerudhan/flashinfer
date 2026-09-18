@@ -108,8 +108,12 @@ run_arm () {
 
   local rc=0
   if [ "$ready" = 1 ]; then
+    # --model/--tokenizer must be the LOCAL checkpoint path: the compute nodes
+    # run with HF_HUB_OFFLINE=1 and no egress, so letting bench_serving resolve
+    # the tokenizer from the Hub fails with LocalEntryNotFoundError.
     python3 -m sglang.bench_serving --backend sglang \
         --host 127.0.0.1 --port $PORT \
+        --model "$MPATH" --tokenizer "$MPATH" \
         --dataset-name random --random-input-len $ISL --random-output-len $OSL \
         --random-range-ratio 0.8 --num-prompts $NPROMPTS --max-concurrency $CONC \
         --output-file "$OUT/${TAG}.jsonl" 2>&1 | tail -18 || rc=1

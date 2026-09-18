@@ -22,6 +22,8 @@ ARM_LABELS = {
     "split_trtllm_fia2a": ("TRTLLM routed", "FlashInfer all2all"),
     "split_trtllm_nixl": ("TRTLLM routed", "NIXL EP"),
     "split_trtllm_deepep": ("TRTLLM routed", "DeepEP LL"),
+    "split_cutedsl_deepep_ht": ("cuTeDSL split", "DeepEP HT"),
+    "split_trtllm_deepep_ht": ("TRTLLM routed", "DeepEP HT"),
     "mega_fi_cutedsl": ("FI MegaMoE (cuTeDSL)", "fused (in-kernel)"),
     "mega_fi_deepgemm": ("FI MegaMoE (deep_gemm)", "fused (in-kernel)"),
     "mega_native_deepgemm": ("Native MegaMoE (deep_gemm)", "fused (in-kernel)"),
