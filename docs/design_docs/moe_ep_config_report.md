@@ -787,13 +787,62 @@ in §5.4 (cuTeDSL split had no accuracy number).
 
 ### 8.3 Results
 
-_Runs in flight (lyris jobs 3095650–3095655 plus 3095668 for the long
-agentic point, three arms each). Populated from `collect_matrix.py` as they
-land._
+DeepSeek-V4-Flash, GB200 (sm100), EP=4, cuda-graph captured. 21/21 arms
+completed (`rc=0`). Ratios are against native MegaMoE in the same row group.
 
-| Scenario | Backend | tok/s | tok/s/GPU | TTFT ms | TPOT ms | ITL ms | vs MegaMoE |
-|---|---|---|---|---|---|---|---|
-| _pending_ | | | | | | | |
+| Scenario | ISL/OSL/batch | Backend | tok/s | tok/s/GPU | TTFT ms | TPOT ms | ITL ms | vs Mega | GSM8K |
+|---|---|---|---:|---:|---:|---:|---:|---:|---:|
+| Chat | 1024/1024/128 | **Native MegaMoE** | **17,200** | 4,300 | 84.6 | 14.23 | 12.18 | 1.000× | 0.855 |
+| Chat | 1024/1024/128 | TRTLLM routed | 13,340 | 3,335 | 120.3 | 18.26 | 15.71 | 0.776× | 0.855 |
+| Chat | 1024/1024/128 | FlashInfer cuTeDSL | 12,965 | 3,241 | 98.3 | 18.90 | 16.29 | 0.754× | 0.845 |
+| RAG | 8192/1024/64 | **Native MegaMoE** | **32,874** | 8,219 | 321.4 | 16.57 | 10.69 | 1.000× | — |
+| RAG | 8192/1024/64 | FlashInfer cuTeDSL | 25,109 | 6,277 | 425.4 | 21.32 | 13.11 | 0.764× | — |
+| RAG | 8192/1024/64 | TRTLLM routed | 23,792 | 5,948 | 420.8 | 23.05 | 14.55 | 0.724× | — |
+| Summarization | 16384/1024/16 | **Native MegaMoE** | **20,885** | 5,221 | 531.5 | 11.91 | 8.69 | 1.000× | — |
+| Summarization | 16384/1024/16 | FlashInfer cuTeDSL | 15,655 | 3,914 | 675.5 | 16.16 | 12.48 | 0.750× | — |
+| Summarization | 16384/1024/16 | TRTLLM routed | 15,524 | 3,881 | 702.9 | 16.25 | 11.92 | 0.743× | — |
+| Code gen | 4096/2048/16 | **Native MegaMoE** | **5,051** | 1,263 | 124.3 | 9.13 | 8.57 | 1.000× | — |
+| Code gen | 4096/2048/16 | TRTLLM routed | 3,734 | 933 | 172.4 | 12.51 | 11.82 | 0.739× | — |
+| Code gen | 4096/2048/16 | FlashInfer cuTeDSL | 3,621 | 905 | 171.0 | 12.93 | 12.45 | 0.717× | — |
+| Agentic | 16384/4096/32 | **Native MegaMoE** | **13,740** | 3,435 | 479.6 | 11.34 | 9.29 | 1.000× | — |
+| Agentic | 16384/4096/32 | TRTLLM routed | 10,202 | 2,551 | 649.7 | 15.47 | 12.91 | 0.742× | — |
+| Agentic | 16384/4096/32 | FlashInfer cuTeDSL | 9,765 | 2,441 | 636.4 | 15.55 | 13.56 | 0.711× | — |
+| Agentic (long) | 32768/4096/16 | **Native MegaMoE** | **12,764** | 3,191 | 914.2 | 10.52 | 8.61 | 1.000× | — |
+| Agentic (long) | 32768/4096/16 | TRTLLM routed | 9,521 | 2,380 | 1225.4 | 14.37 | 11.80 | 0.746× | — |
+| Agentic (long) | 32768/4096/16 | FlashInfer cuTeDSL | 9,471 | 2,368 | 1188.2 | 14.14 | 11.14 | 0.742× | — |
+| Reasoning | 4096/16384/16 | **Native MegaMoE** | **2,234** | 559 | 130.0 | 8.44 | 8.35 | 1.000× | — |
+| Reasoning | 4096/16384/16 | TRTLLM routed | 1,607 | 402 | 178.2 | 11.83 | 11.79 | 0.719× | — |
+| Reasoning | 4096/16384/16 | FlashInfer cuTeDSL | 1,544 | 386 | 172.5 | 12.26 | 12.23 | 0.691× | — |
+
+**Native MegaMoE wins all seven scenarios, and the margin is remarkably
+stable.** The split paths land at 0.69–0.78× of it everywhere — a 1.28–1.45×
+MegaMoE advantage that barely moves across a 32× span of ISL (1K→32K), a 16×
+span of OSL (1K→16K) and an 8× span of batch (16→128). It also wins every
+latency metric in every scenario, not just throughput.
+
+That stability is the result. §5.2c showed the ranking inverting between
+captured and eager, and §5.3a showed it inverting between vLLM and SGLang —
+but *within* captured vLLM it does not depend on the serving shape at all.
+So the choice is not workload-dependent: on this stack, pick the megakernel.
+
+**The two split backends are near-identical**, within 1–6% of each other with
+no consistent winner (TRTLLM routed ahead in 5 of 7, FlashInfer cuTeDSL in
+RAG and summarization). This reproduces §0.3 across the whole size range:
+fused-vs-split is the axis that matters, cuTeDSL-vs-TRTLLM is noise.
+
+**Accuracy is equivalent** where measured (Chat): 0.855 / 0.855 / 0.845, so
+the throughput gap is not bought with numerics.
+
+Two shape effects worth noting for the blog post:
+
+- **Reasoning is the hardest case for everyone.** At OSL 16384 the run is
+  almost pure decode and absolute throughput collapses to 2.2k tok/s
+  (vs 32.9k for RAG) — an order of magnitude, driven by the shape rather
+  than the backend.
+- **Prefill length hurts the split paths more.** The worst split ratios are
+  the long-prefill / long-decode cases (agentic 0.711×, reasoning 0.691×),
+  the best is chat (0.776×), consistent with the dispatch/combine cost being
+  paid per MoE layer regardless of how much work the layer does.
 
 ### 8.4 How to read this section
 
