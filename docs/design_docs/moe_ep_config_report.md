@@ -103,7 +103,7 @@ Verified against the shipped `vllm.config.kernel.MoEBackend` and
 | TRTLLM **routed** | `flashinfer_trtllm` | NVFP4 |
 | FlashInfer **MegaMoE** (cuTeDSL) | `flashinfer_moe_ep_mega_cutedsl` | NVFP4 |
 | FlashInfer **MegaMoE** (deep_gemm) | `flashinfer_moe_ep_mega_deep_gemm` | base (MXFP4/fp8) |
-| **DeepEP MegaMoE** (native) | `deep_gemm_mega_moe` | base (MXFP4/fp8) |
+| **Native MegaMoE** (deep_gemm) | `deep_gemm_mega_moe` | base (MXFP4/fp8) |
 
 ### 3.2 Transport (`--all2all-backend`)
 
@@ -126,7 +126,7 @@ Verified against the shipped `vllm.config.kernel.MoEBackend` and
 | `split_trtllm_deepep` | `flashinfer_trtllm` | `deepep_low_latency` |
 | `mega_fi_cutedsl` | `flashinfer_moe_ep_mega_cutedsl` | — (fused) |
 | `mega_fi_deepgemm` | `flashinfer_moe_ep_mega_deep_gemm` | — (fused) |
-| `mega_deepep_native` | `deep_gemm_mega_moe` | `deepep_low_latency` |
+| `mega_native_deepgemm` | `deep_gemm_mega_moe` | — (fused) |
 
 ### 3.4 SGLang selectors (confirmed against the image's `--help`)
 
@@ -178,6 +178,34 @@ FlashInfer `moe_ep` comm backend and as the unmerged vLLM branch backends
 `flashinfer_ep_low_latency` / `flashinfer_ep_high_throughput`
 (see `vllm_moe_ep_integration.md`), but it cannot be selected in the shipped
 framework, so it is reported N/A at the serving level.
+
+**"DeepEP MegaMoE" is not a configuration that exists.** A megakernel and
+DeepEP are mutually exclusive by construction. In vLLM's DeepSeek-V4 model
+(`models/deepseek_v4/nvidia/model.py`):
+
+```python
+if self.use_mega_moe:
+    self._init_mega_moe_experts(...)   # uses get_ep_group() directly
+else:
+    self._init_fused_moe_experts(...)  # the path that consumes --all2all-backend
+```
+
+with the matching `if not self.use_mega_moe: return self._forward_fused_moe(...)`
+in `forward`. Every member of `MEGA_MOE_BACKENDS` — including the *native*
+`deep_gemm_mega_moe` — therefore bypasses the modular FusedMoE kernel, and
+`--all2all-backend` is **inert** for those arms. Passing `deepep_low_latency`
+alongside `deep_gemm_mega_moe` would produce a cell labelled "DeepEP MegaMoE"
+that never called DeepEP.
+
+So the requested comparison resolves into two real, separate questions, and
+the report answers both:
+
+1. **Native MegaMoE vs FlashInfer MegaMoE** — `deep_gemm_mega_moe` vs
+   `flashinfer_moe_ep_mega_{deep_gemm,cutedsl}`. Both are fused-comm
+   megakernels; this is the mega-vs-mega question.
+2. **DeepEP vs FlashInfer all2all vs NIXL as a transport** — measured on the
+   **split** runners (`flashinfer_cutedsl`, `flashinfer_trtllm`), which are
+   the only configurations where the transport is actually on the path.
 
 **FlashInfer all2all is not a `moe_ep` comm backend.** `moe_ep` ships exactly
 two split transports, `nccl_ep` and `nixl_ep`

@@ -46,7 +46,12 @@ arm_spec () {
     split_trtllm_deepep)  echo "flashinfer_trtllm deepep_low_latency nvfp4" ;;
     mega_fi_cutedsl)      echo "flashinfer_moe_ep_mega_cutedsl - nvfp4" ;;
     mega_fi_deepgemm)     echo "flashinfer_moe_ep_mega_deep_gemm - base" ;;
-    mega_deepep_native)   echo "deep_gemm_mega_moe deepep_low_latency base" ;;
+    # Native (non-FlashInfer) megakernel. NOTE: mega backends bypass the
+    # modular FusedMoE path entirely (model.py: use_mega_moe ->
+    # _init_mega_moe_experts, which uses get_ep_group() directly), so
+    # --all2all-backend is inert here and is deliberately NOT passed --
+    # passing deepep_* would have mislabelled this as a DeepEP measurement.
+    mega_native_deepgemm) echo "deep_gemm_mega_moe - base" ;;
     *) echo "" ;;
   esac
 }

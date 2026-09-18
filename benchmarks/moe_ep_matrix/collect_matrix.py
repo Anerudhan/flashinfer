@@ -24,7 +24,7 @@ ARM_LABELS = {
     "split_trtllm_deepep": ("TRTLLM routed", "DeepEP LL"),
     "mega_fi_cutedsl": ("FI MegaMoE (cuTeDSL)", "fused (in-kernel)"),
     "mega_fi_deepgemm": ("FI MegaMoE (deep_gemm)", "fused (in-kernel)"),
-    "mega_deepep_native": ("DeepEP MegaMoE", "DeepEP LL"),
+    "mega_native_deepgemm": ("Native MegaMoE (deep_gemm)", "fused (in-kernel)"),
 }
 
 ARM_LABELS.update(

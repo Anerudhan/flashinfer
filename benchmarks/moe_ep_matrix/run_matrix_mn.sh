@@ -53,7 +53,9 @@ arm_spec () {
     split_trtllm_deepep)  echo "flashinfer_trtllm deepep_low_latency nvfp4" ;;
     mega_fi_cutedsl)      echo "flashinfer_moe_ep_mega_cutedsl - nvfp4" ;;
     mega_fi_deepgemm)     echo "flashinfer_moe_ep_mega_deep_gemm - base" ;;
-    mega_deepep_native)   echo "deep_gemm_mega_moe deepep_low_latency base" ;;
+    # See run_matrix.sh: mega backends bypass the modular FusedMoE path, so
+    # --all2all-backend is inert for this arm and is not passed.
+    mega_native_deepgemm) echo "deep_gemm_mega_moe - base" ;;
     *) echo "" ;;
   esac
 }
