@@ -210,6 +210,29 @@ the report answers both:
    **split** runners (`flashinfer_cutedsl`, `flashinfer_trtllm`), which are
    the only configurations where the transport is actually on the path.
 
+**cuTeDSL *split* is unavailable for DeepSeek-V4 in vLLM 0.29.0.** Every
+`flashinfer_cutedsl` arm aborts during worker init:
+
+```
+ValueError: Model sets swiglu_limit=10.0, but the explicitly requested
+moe_backend='flashinfer_cutedsl' does not apply the SwiGLU clamp. Use
+'flashinfer_trtllm', 'flashinfer_cutlass', 'flashinfer_cutedsl', 'cutlass',
+'b12x', 'marlin', or 'humming' instead.
+```
+
+DeepSeek-V4 clamps the routed-expert SwiGLU (`swiglu_limit=10.0`) and vLLM
+refuses a MoE backend that would silently skip the clamp — a correctness
+gate, not a perf one. (The message is itself inconsistent: it lists
+`flashinfer_cutedsl` among the suggested alternatives while rejecting it.
+Worth reporting upstream.) The failure happens *before* the transport is
+exercised — the log shows `Using NixlEPAll2AllManager all2all manager`
+immediately before the abort — so it says nothing about NIXL.
+
+Consequence: in vLLM the split-runner half of the matrix is carried by
+**`flashinfer_trtllm`** alone, and the "cuTeDSL split vs MegaMoE" question is
+answered for SGLang (where `flashinfer_cutedsl` is a listed runner backend)
+rather than vLLM.
+
 **FlashInfer all2all is not a `moe_ep` comm backend.** `moe_ep` ships exactly
 two split transports, `nccl_ep` and `nixl_ep`
 (`flashinfer/moe_ep/backends/split/comm/`). The FlashInfer all2all used here
@@ -262,15 +285,32 @@ ISL 8192 / OSL 1024, `--random-range-ratio 0.8`, `max_concurrency 64`,
 admits ~5 concurrent requests, so this row set characterises the
 **small-batch** regime only.
 
-| Compute | Transport | done | tok/s | tok/s/GPU | TTFT ms | TPOT ms | ITL ms |
-|---|---|---:|---:|---:|---:|---:|---:|
-| FI MegaMoE (cuTeDSL) | fused (in-kernel) | 128 | 12,302 | 3,076 | 1,542 | 41.7 | 29.7 |
+| Compute | Transport | done | tok/s | tok/s/GPU | TTFT ms | TPOT ms | ITL ms | vs MegaMoE |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| FI MegaMoE (cuTeDSL) | fused (in-kernel) | 128 | 12,302 | 3,076 | 1,542 | 41.7 | 29.7 | 1.000× |
+| TRTLLM routed | FlashInfer all2all | 128 | 9,868 | 2,467 | 1,799 | 53.0 | 36.8 | **0.802×** |
 
-_Remaining arms in flight._
+MegaMoE leads TRTLLM-routed by **1.25×** on throughput and is ahead on every
+latency percentile. This is worth flagging against the SGLang PR's summary,
+which reports `flashinfer_trtllm_routed` winning at low concurrency: the
+effective concurrency here is KV-capped at ~5 (§2.1), and MegaMoE still wins,
+so on this geometry the crossover — if any — sits below `max_concurrency 64`
+rather than above it.
+
+_Remaining V4-Pro arms in flight._
 
 ### 5.2 DeepSeek-V4-Flash, GB200 EP=4
 
-_Pending — checkpoint staging in flight._
+ISL 8192 / OSL 1024, `max_concurrency 256`, 512 prompts after 512 warmups.
+KV headroom here is 76.4× (§2.1), so this is the regime that can actually
+show the crossover.
+
+| Compute | Transport | done | tok/s | tok/s/GPU | TTFT ms | TPOT ms | ITL ms |
+|---|---|---:|---:|---:|---:|---:|---:|
+| FI MegaMoE (cuTeDSL) | fused (in-kernel) | 512 | 73,091 | 18,273 | 1,808 | 26.3 | 16.1 |
+
+_TRTLLM-routed × {FlashInfer all2all, NIXL, DeepEP} and the two deep_gemm
+mega arms are in flight, with GSM8K enabled._
 
 ### 5.3 SGLang cross-check
 
