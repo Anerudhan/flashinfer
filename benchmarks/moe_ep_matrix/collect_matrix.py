@@ -47,7 +47,7 @@ ARM_LABELS.update(
 
 FNAME_RE = re.compile(
     r"^(?P<model>pro|flash)_(?P<arm>[a-z0-9_]+)_ep(?P<ep>\d+)"
-    r"_conc(?P<conc>\d+)_mnbt(?P<mnbt>\d+)\.json$"
+    r"_conc(?P<conc>\d+)_mnbt(?P<mnbt>\d+)(?P<eager>eager)?\.json$"
 )
 
 # SGLang: sg_<model>_<arm>_ep<N>_conc<C>.jsonl (bench_serving --output-file)
@@ -84,6 +84,7 @@ def _load_sglang(path, info):
         "ep": ngpu,
         "conc": int(info["conc"]),
         "mnbt": 0,
+        "eager": False,
         "completed": last.get("completed", 0),
         "tok_s": tok_s,
         "tok_s_gpu": tok_s / ngpu,
@@ -140,7 +141,10 @@ def load_rows(result_dirs):
                     "transport": ARM_LABELS.get(info["arm"], ("?", "?"))[1],
                     "ep": ngpu,
                     "conc": int(info["conc"]),
-                    "mnbt": int(info["mnbt"]),
+                    # eager runs get a distinct group key so they never share a
+                    # comparison group with cuda-graph-captured runs
+                    "mnbt": int(info["mnbt"]) + (10**6 if info.get("eager") else 0),
+                    "eager": bool(info.get("eager")),
                     "completed": data.get("completed", 0),
                     "tok_s": data.get("total_token_throughput", 0.0),
                     "tok_s_gpu": data.get("total_token_throughput", 0.0) / ngpu,
@@ -209,7 +213,8 @@ def main():
 
     if args.csv:
         with open(args.csv, "w", newline="") as fh:
-            w = csv.DictWriter(fh, fieldnames=list(rows[0].keys()))
+            fields = list(dict.fromkeys(k for r in rows for k in r))
+            w = csv.DictWriter(fh, fieldnames=fields)
             w.writeheader()
             w.writerows(rows)
         print(f"wrote {args.csv}")

@@ -38,6 +38,7 @@ srun --container-image=${IMG} \
      --container-workdir=${ROOT}/InferenceX \
      bash -lc 'ROOT=${ROOT} OUT=${OUT} MODEL=${MODEL} ARMS="${ARMS}" MODE=${MODE} \
         CONC=\${CONC:-256} MNBT=\${MNBT:-2048} NPROMPTS=\${NPROMPTS:-512} \
+        EAGER=\${EAGER:-0} GPU_MEM_UTIL=\${GPU_MEM_UTIL:-0.92} ACC_N=\${ACC_N:-200} \
         bash ${ROOT}/${DRIVER}'
 echo "RESULTS: ${OUT}"
 EOF

@@ -93,7 +93,11 @@ run_arm () {
   [ -z "$spec" ] && { echo "!! unknown arm $ARM"; return 2; }
   read -r BACKEND A2A CKIND <<< "$spec"
   local MPATH; [ "$CKIND" = nvfp4 ] && MPATH=$CKPT_NVFP4 || MPATH=$CKPT_BASE
-  local TAG="${MODEL}_${ARM}_ep${EP}_conc${CONC}_mnbt${MNBT}"
+  # Eager runs get their own mnbt tag slot so the collector can never place an
+  # eager number in the same comparison group as a cuda-graph-captured one.
+  local MNBT_TAG=$MNBT
+  [ "${EAGER:-0}" = 1 ] && MNBT_TAG="${MNBT}eager"
+  local TAG="${MODEL}_${ARM}_ep${EP}_conc${CONC}_mnbt${MNBT_TAG}"
 
   echo
   echo "########## ARM=$ARM model=$MODEL backend=$BACKEND all2all=${A2A} ckpt=$(basename $MPATH)"
@@ -108,6 +112,14 @@ run_arm () {
   local A2A_ARGS=()
   [ "$A2A" != "-" ] && A2A_ARGS=(--all2all-backend "$A2A")
 
+  # EAGER=1 drops CUDA-graph capture. Needed for DeepEP high-throughput, whose
+  # dispatch dies during capture with "DeepEP error: CPU recv timeout" /
+  # "capturing stream has unjoined work". Only comparable against other EAGER=1
+  # arms -- never mix eager and captured numbers in one table.
+  local GRAPH_ARGS=(--max-cudagraph-capture-size $MNBT
+    --compilation-config "{\"cudagraph_mode\":\"FULL_AND_PIECEWISE\",\"custom_ops\":[\"all\"],\"cudagraph_capture_sizes\":$SIZES}")
+  [ "${EAGER:-0}" = 1 ] && GRAPH_ARGS=(--enforce-eager)
+
   local COMMON=(--served-model-name "$MPATH"
     --data-parallel-size $EP --tensor-parallel-size 1 --enable-expert-parallel
     --moe-backend "$BACKEND" "${A2A_ARGS[@]}"
@@ -115,8 +127,7 @@ run_arm () {
     --tokenizer-mode deepseek_v4 --tool-call-parser deepseek_v4 --enable-auto-tool-choice
     --reasoning-parser deepseek_v4 --attention_config.use_fp4_indexer_cache True
     --max-model-len $((ISL+OSL+256)) --max-num-batched-tokens $MNBT
-    --max-cudagraph-capture-size $MNBT
-    --compilation-config "{\"cudagraph_mode\":\"FULL_AND_PIECEWISE\",\"custom_ops\":[\"all\"],\"cudagraph_capture_sizes\":$SIZES}"
+    "${GRAPH_ARGS[@]}"
     --gpu-memory-utilization ${GPU_MEM_UTIL:-0.92})
 
   vllm serve "$MPATH" "${COMMON[@]}" --host 0.0.0.0 --port $PORT \
