@@ -742,6 +742,22 @@ def main() -> int:
                 except Exception as exc:  # noqa: BLE001
                     row["note"] = f"{type(exc).__name__}: {exc}"[:200]
             rows.append(row)
+            if rank == 0:
+                # Print as we go: a long matrix is otherwise a black box until
+                # the very end, and a mid-run hang is indistinguishable from
+                # slow autotune.
+                if row["ok"]:
+                    print(
+                        f"  [{cfg.name}] tokens={n:<6} {row['us']:9.1f} us "
+                        f"({row['us_per_tok']:.4f} us/tok)"
+                        f"{' graph' if row['graph'] else ''}",
+                        flush=True,
+                    )
+                else:
+                    print(
+                        f"  [{cfg.name}] tokens={n:<6} FAIL {row['note']}",
+                        flush=True,
+                    )
             dist.barrier()
 
         if layer is not None:
