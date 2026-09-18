@@ -151,7 +151,10 @@ MegaMoE tuning knobs (env): `SGLANG_FLASHINFER_MEGAMOE_COMBINE_DTYPE`
 (`bf16`/`mxfp8`/`nvfp4`), `SGLANG_FLASHINFER_MEGAMOE_IN_KERNEL_FC2_REDUCE`,
 `SGLANG_FLASHINFER_MEGAMOE_MAX_TOKENS_PER_RANK`.
 
-### 3.5 Two axes that do not exist as asked — and why
+### 3.5 Axes that do not exist as posed — and why
+
+Four of the requested cells cannot be built as stated. Each is a finding
+about how the stacks are actually wired, not a gap in the measurement.
 
 These are findings, not omissions.
 
