@@ -482,7 +482,23 @@ Support result already established: `flashinfer_trtllm_routed` + `deepep` is
 MoeRunnerBackend.FLASHINFER_TRTLLM_ROUTED requires a fused func for a2a
 backend deepep, but none is registered.`
 
-_Throughput table pending — arms in flight._
+**SGLang serving comes up correctly; its throughput numbers are not in this
+revision.** `sg_megamoe` reaches
+`The server is fired up and ready to roll!` (ready after 560 s, 16.47M-token
+KV pool, weights loaded as `quant=fp8, quant_algo=MIXED_PRECISION` with NVFP4
+experts), so the *serving path* is validated. But
+`sglang.bench_serving` then exits non-zero against an
+`huggingface_hub.errors.LocalEntryNotFoundError` even with `--model` and
+`--tokenizer` pointed at the local checkpoint directory, on compute nodes
+that have no egress and run `HF_HUB_OFFLINE=1`. The checkpoint itself is not
+at fault — it ships `tokenizer.json` / `tokenizer_config.json`, declares
+`tokenizer_class: PreTrainedTokenizerFast`, and has no `auto_map` remote-code
+reference — so something else inside `bench_serving` reaches for the Hub.
+Resolving that is a harness issue, not a MoE-EP result, and is the one
+outstanding item.
+
+What SGLang *did* contribute to this report is the support/configuration
+evidence above (§3.4, §3.4b), which is independent of the benchmark client.
 
 ### 5.4 Correctness (GSM8K)
 
