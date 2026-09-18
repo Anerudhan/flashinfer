@@ -340,20 +340,38 @@ ISL 8192 / OSL 1024, `max_concurrency 256`, 512 prompts after 512 warmups.
 KV headroom here is 76.4× (§2.1), so this is the regime that can actually
 show the crossover.
 
-| Compute | Transport | done | tok/s | tok/s/GPU | TTFT ms | TPOT ms | ITL ms | vs MegaMoE | GSM8K |
+| Compute | Transport | done | tok/s | tok/s/GPU | TTFT ms | TPOT ms | ITL ms | vs FI Mega | GSM8K |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| **Native MegaMoE (deep_gemm)** | fused (in-kernel) | 512 | **77,956** | 19,489 | 1,700 | 25.1 | 13.9 | **1.067×** | 0.870 |
 | FI MegaMoE (cuTeDSL) | fused (in-kernel) | 512 | 73,091 | 18,273 | 1,808 | 26.3 | 16.1 | 1.000× | — |
 | cuTeDSL split | FlashInfer all2all | 512 | 62,408 | 15,602 | 1,756 | 31.6 | 18.5 | 0.854× | — |
-| TRTLLM routed | FlashInfer all2all | 512 | 61,795 | 15,449 | 1,641 | 32.4 | 17.7 | 0.845× | **0.875** |
+| TRTLLM routed | FlashInfer all2all | 512 | 61,795 | 15,449 | 1,641 | 32.4 | 17.7 | 0.845× | 0.875 |
+| cuTeDSL split | NIXL EP | — | \_ | \_ | \_ | \_ | \_ | **N/A** | — |
+| TRTLLM routed | NIXL EP | — | \_ | \_ | \_ | \_ | \_ | **N/A** | — |
+| TRTLLM routed | DeepEP LL | — | \_ | \_ | \_ | \_ | \_ | **N/A** | — |
+| FI MegaMoE (deep_gemm) | fused (in-kernel) | — | \_ | \_ | \_ | \_ | \_ | **N/A** | — |
 
-At `max_concurrency 256` the fused megakernel leads both split paths by
-**~1.17×** on throughput, and the two split runners are within 1% of each
-other — i.e. at this operating point the choice of *inner kernel*
-(cuTeDSL vs TRTLLM-routed) matters far less than whether the comm is fused
-into the kernel at all. TRTLLM-routed has the best TTFT (1,641 ms), so the
-megakernel's win is a decode-side (TPOT/ITL) win, not a prefill one.
+**N/A** rows are configuration-impossible on this stack, not slow — see §3.5.
+NIXL-EP and DeepEP-LL both require the `batched_experts` activation format
+that the FlashInfer NVFP4 split kernels do not implement;
+`flashinfer_moe_ep_mega_deep_gemm` needs a standalone DeepGEMM the image
+lacks.
 
-_TRTLLM-routed × {NIXL, DeepEP} and the deep_gemm mega arms are in flight._
+Three things fall out of this table:
+
+1. **Fusing the comm is worth ~1.17×.** Both megakernels beat both split
+   paths by a wide margin (73.1k / 78.0k vs 61.8k / 62.4k tok/s).
+2. **The inner-kernel choice barely matters on the split path.** cuTeDSL
+   split and TRTLLM-routed land within 1% of each other. TRTLLM-routed even
+   has the best TTFT of any arm (1,641 ms), so the megakernels' advantage is
+   decode-side (TPOT/ITL), not prefill.
+3. **Native deep_gemm MegaMoE currently beats FlashInfer cuTeDSL MegaMoE by
+   6.7%** (77,956 vs 73,091 tok/s) and is ahead on every latency metric
+   (ITL 13.9 vs 16.1 ms). Both are functionally correct (GSM8K 0.870 vs the
+   0.875 of the TRTLLM-routed arm). This is the headline
+   "native vs FlashInfer megakernel" result and is the one worth chasing —
+   it is the reverse of what the FlashInfer MegaMoE integration is aiming
+   for, and the gap is decode-latency-shaped.
 
 ### 5.3 SGLang cross-check
 
