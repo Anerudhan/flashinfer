@@ -226,7 +226,16 @@ perf number reported as invalid rather than dropped silently.
 
 ### 5.1 DeepSeek-V4-Pro, GB300 EP=4
 
-_Pending — runs in flight._
+ISL 8192 / OSL 1024, `--random-range-ratio 0.8`, `max_concurrency 64`,
+128 prompts after 128 warmups. Note the KV ceiling from §2.1: the server
+admits ~5 concurrent requests, so this row set characterises the
+**small-batch** regime only.
+
+| Compute | Transport | done | tok/s | tok/s/GPU | TTFT ms | TPOT ms | ITL ms |
+|---|---|---:|---:|---:|---:|---:|---:|
+| FI MegaMoE (cuTeDSL) | fused (in-kernel) | 128 | 12,302 | 3,076 | 1,542 | 41.7 | 29.7 |
+
+_Remaining arms in flight._
 
 ### 5.2 DeepSeek-V4-Flash, GB200 EP=4
 
