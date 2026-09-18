@@ -22,6 +22,49 @@ Reference integrations:
 
 ---
 
+## 0. Summary — what to put in the blog post
+
+**0.1 The transport axis is mostly a fiction today.** MoE runners and
+all2all transports are *co-designed pairs*, not freely composable choices.
+On DeepSeek-V4 NVFP4, the FlashInfer split runners
+(`flashinfer_cutedsl`, `flashinfer_trtllm`) pair **only** with FlashInfer
+all2all: NIXL-EP and DeepEP-low-latency both require the `batched_experts`
+activation format, which those NVFP4 kernels do not implement, and the server
+refuses at init. SGLang says the same thing in its own words —
+*"requires a fused func for a2a backend deepep, but none is registered."*
+NCCL-EP is not exposed by either framework at all. Full support table: §3.4b.
+
+**0.2 Fusing the communication into the kernel is worth ~1.17×.** On
+V4-Flash (GB200, EP=4, ISL 8192 / OSL 1024, conc 256), both megakernels beat
+both split paths by a wide margin — 73.1k–78.0k vs 61.8k–62.4k tok/s. The
+win is decode-shaped: TRTLLM-routed actually posts the *best* TTFT of any arm
+(1,641 ms), and the megakernels take it back on TPOT/ITL.
+
+**0.3 Which split inner-kernel you pick barely matters.** cuTeDSL split and
+TRTLLM-routed land within 1% of each other (62,408 vs 61,795 tok/s). The
+interesting axis is fused-vs-split, not cuTeDSL-vs-TRTLLM.
+
+**0.4 The headline gap: native deep_gemm MegaMoE is currently 6.7% faster
+than FlashInfer cuTeDSL MegaMoE** (77,956 vs 73,091 tok/s) and ahead on every
+latency metric (ITL 13.9 vs 16.1 ms), at equal accuracy (GSM8K 0.870 vs
+0.875). This is the reverse of what the FlashInfer MegaMoE integration is
+aiming for, and it is the most actionable result here.
+
+**0.5 Model size decides which regime you can even measure.** V4-Pro's
+851 GB NVFP4 checkpoint leaves ~47k KV tokens per rank at EP=4 — max
+concurrency 5.0× — so a single node can only probe the small-batch corner.
+V4-Flash has 15× the headroom (76.4×) and carries the real sweep. Any
+V4-Pro large-batch claim needs EP=8 across two nodes.
+
+**0.6 Two integration bugs found.**
+`flashinfer_moe_ep_mega_deep_gemm` hard-imports `deep_gemm` and fails on an
+image where vLLM's own mega path works fine via its vendored
+`vllm.third_party.deep_gemm`. And vLLM's SwiGLU-clamp rejection message lists
+`flashinfer_cutedsl` among the alternatives to the `flashinfer_cutedsl` it is
+rejecting. Both worth filing upstream.
+
+---
+
 ## 1. Model geometries
 
 Read from the checkpoint `config.json` (not inferred):
