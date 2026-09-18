@@ -25,7 +25,7 @@ export PYTHONDONTWRITEBYTECODE=1 PYTHONPYCACHEPREFIX=/tmp/ix-pycache
 
 case $MODEL in
   pro)   CKPT_NVFP4=$ROOT/ckpt/deepseek-v4-pro-nvfp4; CKPT_BASE=$ROOT/ckpt/deepseek-v4-pro ;;
-  flash) CKPT_NVFP4=$ROOT/ckpt/deepseek-v4-flash-nvfp4; CKPT_BASE=$ROOT/ckpt/deepseek-v4-flash-nvfp4 ;;
+  flash) CKPT_NVFP4=$ROOT/ckpt/deepseek-v4-flash-nvfp4; CKPT_BASE=$ROOT/ckpt/deepseek-v4-flash ;;
   *) echo "unknown MODEL=$MODEL"; exit 2 ;;
 esac
 
@@ -86,6 +86,10 @@ run_arm () {
 
   echo
   echo "########## ARM=$ARM model=$MODEL backend=$BACKEND all2all=${A2A} ckpt=$(basename $MPATH)"
+  if [ ! -f "$MPATH/config.json" ]; then
+    echo "  SKIP $ARM: checkpoint not staged at $MPATH"
+    return 0
+  fi
   if [ "$(port_state $PORT)" != "FREE" ]; then
     echo "  FATAL: port busy before arm -- refusing to measure"; return 9
   fi

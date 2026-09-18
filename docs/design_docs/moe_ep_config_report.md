@@ -48,8 +48,8 @@ transport is legal for both models.
 | | |
 |---|---|
 | Cluster | lyris (SLURM + pyxis), aarch64 |
-| V4-Pro runs | 1× GB300 node (`theia`), 4× GB300, 284 GB/GPU, EP=4 |
-| V4-Flash runs | 1× GB200 node (`lyris`), 4× GB200, 183 GB/GPU, EP=4 |
+| V4-Pro runs | 1× GB300 node (`theia`), 4× GB300, 284 GB/GPU, cc 10.3 (sm103), EP=4 |
+| V4-Flash runs | 1× GB200 node (`lyris`), 4× GB200, 183 GB/GPU, cc 10.0 (sm100), EP=4 |
 | vLLM | 0.29.0 (arm64 image), contains the merged #49636 code |
 | SGLang | `lmsysorg/sglang:nightly-dev-cu13-20260918-20518d85` (arm64), post-merge |
 | FlashInfer | 0.6.18 (in the vLLM image) |
@@ -107,11 +107,39 @@ Verified against the shipped `vllm.config.kernel.MoEBackend` and
 | `mega_fi_deepgemm` | `flashinfer_moe_ep_mega_deep_gemm` | — (fused) |
 | `mega_deepep_native` | `deep_gemm_mega_moe` | `deepep_low_latency` |
 
-### 3.4 Two axes that do not exist as asked — and why
+### 3.4 SGLang selectors (confirmed against the image's `--help`)
+
+| Report axis | SGLang selector |
+|---|---|
+| cuTeDSL split | `--moe-runner-backend flashinfer_cutedsl` |
+| TRTLLM routed | `--moe-runner-backend flashinfer_trtllm_routed` |
+| FlashInfer MegaMoE | `--moe-runner-backend flashinfer_megamoe` + `--moe-a2a-backend flashinfer_megamoe` |
+| FlashInfer all2all | `--moe-a2a-backend flashinfer` (+ `--flashinfer-a2a-dispatch-type {auto,bf16,nvfp4,mxfp8}`) |
+| NIXL EP | `--moe-a2a-backend nixl` |
+| DeepEP | `--moe-a2a-backend deepep` (also `deepep_v2`) |
+| NCCL EP | **not available** — absent from the a2a enum |
+
+Full a2a enum: `{none, deepep, mooncake, nixl, mori, ascend_fuseep, flashinfer,
+megamoe, deepep_v2, pplx, ascend_tp, flashinfer_megamoe}`.
+
+SGLang therefore covers **all three** requested transports for the split
+runners (FlashInfer all2all / NIXL / DeepEP), where vLLM 0.29.0 lacks NIXL
+for some paths; neither framework exposes NCCL-EP.
+
+MegaMoE tuning knobs (env): `SGLANG_FLASHINFER_MEGAMOE_COMBINE_DTYPE`
+(`bf16`/`mxfp8`/`nvfp4`), `SGLANG_FLASHINFER_MEGAMOE_IN_KERNEL_FC2_REDUCE`,
+`SGLANG_FLASHINFER_MEGAMOE_MAX_TOKENS_PER_RANK`.
+
+### 3.5 Two axes that do not exist as asked — and why
 
 These are findings, not omissions.
 
-**MegaMoE has no transport axis.** The mega path is a single fused
+**MegaMoE has no transport axis.** Both frameworks agree on this
+independently. SGLang's arg hook *rejects* `--moe-a2a-backend
+flashinfer_megamoe` unless `--moe-runner-backend` is also
+`flashinfer_megamoe` ("FlashInfer MegaMOE a2a backend requires
+--moe-runner-backend flashinfer_megamoe"): the transport and the kernel are
+one selection. On the FlashInfer side, the mega path is a single fused
 comm+compute kernel over NVSHMEM symmetric memory.
 `flashinfer/moe_ep/modes/mega_layer.py` states it directly — *"Fused EP mega
 kernel — no separate dispatch/combine transport"* — and `MegaConfig` carries
