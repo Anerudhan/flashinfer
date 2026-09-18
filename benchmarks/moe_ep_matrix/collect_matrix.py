@@ -122,7 +122,9 @@ def load_rows(result_dirs):
                 try:
                     with open(acc_path) as fh:
                         a = json.load(fh)
-                    acc = a.get("accuracy", a.get("acc"))
+                    # eval_gsm8k.py writes {"summary": {...}, "results": [...]}
+                    summary = a.get("summary", a)
+                    acc = summary.get("accuracy", summary.get("acc"))
                 except Exception:  # noqa: BLE001
                     pass
 
