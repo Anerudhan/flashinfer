@@ -15,10 +15,10 @@ Reference integrations:
   "[Model][MoE] DeepSeek-V4: add opt-in FlashInfer moe_ep expert backend" —
   merged 2026-08-25 (`8fe9317f`).
 
-> **Status: in progress.** Environment and configuration mapping are settled
-> and verified against the shipped code (below). Result tables are populated
-> as runs land; every empty cell is a run that has not completed yet, not a
-> measured zero.
+> **Status.** Measured: 12 serving cells across both models and both
+> frameworks, plus GSM8K on two of them. Every configuration marked **N/A**
+> is one the stack refuses to run, with the exact error quoted — not a
+> missing measurement. Known gaps are listed in §7.
 
 ---
 
@@ -65,9 +65,11 @@ amortisation under capture, not intrinsic device efficiency — its ITL is
 still the best of the three in eager mode. Any claim about MegaMoE's speedup
 should state the capture mode it was measured in.
 
-**0.3 Which split inner-kernel you pick barely matters.** cuTeDSL split and
-TRTLLM-routed land within 1% of each other (62,408 vs 61,795 tok/s). The
-interesting axis is fused-vs-split, not cuTeDSL-vs-TRTLLM.
+**0.3 The split inner-kernel choice is second-order.** Under vLLM, cuTeDSL
+split and TRTLLM-routed land within 1% of each other (62,408 vs 61,795
+tok/s); under SGLang cuTeDSL is ahead by 5.8% (45,860 vs 43,333). Either way
+the fused-vs-split axis moves the number far more than cuTeDSL-vs-TRTLLM
+does. TRTLLM-routed consistently wins TTFT, cuTeDSL consistently wins TPOT.
 
 **0.4 The headline gap: native deep_gemm MegaMoE is currently 6.7% faster
 than FlashInfer cuTeDSL MegaMoE** (77,956 vs 73,091 tok/s) and ahead on every
@@ -690,3 +692,22 @@ capture, `GPU_MEM_UTIL`, `ACC_N` (GSM8K question count), `MNBT`, `ISL`/`OSL`.
 `run_matrix.sh` holds the arm table; `collect_matrix.py` renders the report
 table (throughput, tok/s/GPU, TTFT/TPOT/ITL medians, ratio vs a chosen
 baseline arm, GSM8K).
+
+---
+
+## 7. Known gaps
+
+Stated plainly so nothing here reads as more complete than it is.
+
+| Gap | Why | Cost to close |
+|---|---|---|
+| `flashinfer_moe_ep_mega_deep_gemm` unmeasured | Hard `import deep_gemm`; the vLLM image has no standalone DeepGEMM and three build attempts failed (container lacks `git`; `install.sh` calls bare `python`; wheel never produced). vLLM's native mega path works on the same image via its vendored copy. | Fix the FlashInfer backend to fall back to `vllm.third_party.deep_gemm`, or bake a working DeepGEMM image. |
+| V4-Pro large-batch regime | KV-bound to 5.0× concurrency at EP=4 (§2.1); only the small-batch corner was probed. | Run `job_matrix_mn.sh` (written, staged, unrun) for EP=8 across two GB300 nodes. |
+| NIXL-EP throughput | Refused by every FlashInfer runner on both frameworks (§3.4b) — no number exists to report. | Needs a `batched_experts`-capable NVFP4 FlashInfer kernel, or a non-batched NIXL path. |
+| `sg_split_cutedsl_deepep` throughput | Serves (ready 150 s) but benchmark warmup aborts with `TransferEncodingError: 400`. | Untriaged; likely a client/server protocol issue, not MoE-EP. |
+| Cross-framework absolute tok/s | vLLM and SGLang were run at their own scheduler / chunked-prefill / capture defaults, not normalised. | Only within-framework orderings are claimed (§5.3a). |
+| Single measurement per cell | No repeats; run-to-run variance not quantified. | Re-run key cells ≥3× and report medians before publishing tight ratios. |
+
+The last row matters most for the blog post: the 6.7% native-vs-FlashInfer
+MegaMoE gap (§0.4) is the tightest claim in this report and rests on one run
+per arm. It should be repeated before it is published as a number.
