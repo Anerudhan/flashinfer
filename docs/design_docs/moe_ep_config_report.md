@@ -33,9 +33,12 @@ FlashInfer all2all. NIXL-EP and DeepEP-**low-latency** both require the
 implement, and the server refuses at init. DeepEP-**high-throughput** clears
 that gate but then dies inside CUDA-graph capture
 (`DeepEP error: CPU recv timeout`), so it is only measurable in eager mode.
-SGLang states the same constraint in its own vocabulary —
-*"requires a fused func for a2a backend deepep, but none is registered."*
-NCCL-EP is not exposed by either framework at all. Full support table: §3.4b.
+SGLang reaches the identical conclusion independently: both `nixl` and
+`deepep` are refused for `flashinfer_trtllm_routed` with
+*"requires a fused func for a2a backend &lt;x&gt;, but none is registered."*
+NCCL-EP is not exposed by either framework at all. So **on both frameworks
+the FlashInfer split runners have exactly one usable transport — FlashInfer
+all2all.** Full support table: §3.4b.
 
 **0.2 Fusing the communication into the kernel is worth ~1.17×.** On
 V4-Flash (GB200, EP=4, ISL 8192 / OSL 1024, conc 256), both megakernels beat
@@ -218,9 +221,23 @@ completion, ✗ = refused at init, — = not applicable):
 
 | `--moe-runner-backend` | `flashinfer` | `nixl` | `deepep` | `flashinfer_megamoe` |
 |---|---|---|---|---|
-| `flashinfer_cutedsl` | _measuring_ | _measuring_ | _measuring_ | — |
-| `flashinfer_trtllm_routed` | _measuring_ | _measuring_ | ✗ no fused func | — |
-| `flashinfer_megamoe` | — | — | — | ✅ (required pairing) |
+| `flashinfer_cutedsl` | ✅ serves¹ | ✗ no fused func | ✗ no fused func | — |
+| `flashinfer_trtllm_routed` | ✅ serves¹ | ✗ no fused func | ✗ no fused func | — |
+| `flashinfer_megamoe` | — | — | — | ✅ serves¹ (required pairing) |
+
+¹ "serves" = the server reaches
+`The server is fired up and ready to roll!`. SGLang throughput numbers are
+absent from this revision for a benchmark-client reason unrelated to MoE-EP
+(§5.3), not because the configuration failed.
+
+SGLang's refusal is identical in shape for both unsupported transports:
+
+```
+NotImplementedError: Runner backend MoeRunnerBackend.FLASHINFER_TRTLLM_ROUTED
+requires a fused func for a2a backend nixl, but none is registered.
+NotImplementedError: Runner backend MoeRunnerBackend.FLASHINFER_TRTLLM_ROUTED
+requires a fused func for a2a backend deepep, but none is registered.
+```
 
 The two refusal modes are explicit and worth quoting, because they say the
 same thing in two vocabularies:
