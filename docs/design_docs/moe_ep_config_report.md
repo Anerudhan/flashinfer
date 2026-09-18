@@ -210,10 +210,20 @@ the report answers both:
    **split** runners (`flashinfer_cutedsl`, `flashinfer_trtllm`), which are
    the only configurations where the transport is actually on the path.
 
-**cuTeDSL split + NIXL-EP hits a SwiGLU-clamp gate (the cuTeDSL runner
-itself is fine).** `flashinfer_cutedsl` serves DeepSeek-V4-Flash normally
-under `flashinfer_all2allv` (512/512 requests, §5.2). Paired with
-`nixl_ep`, the same runner aborts during worker init:
+**NIXL-EP is not usable with either FlashInfer split runner in vLLM 0.29.0.**
+Both `flashinfer_trtllm` and `flashinfer_cutedsl` serve DeepSeek-V4 normally
+under `flashinfer_all2allv` (§5.2) and both abort during worker init under
+`nixl_ep`. The TRTLLM failure names the root cause directly:
+
+```
+ValueError: NvFp4 MoE backend 'FLASHINFER_TRTLLM' does not support the
+deployment configuration since kernel does not support
+('batched_experts',) activation format.
+```
+
+NIXL-EP selects the **`batched_experts`** activation format, and neither
+FlashInfer NVFP4 split kernel implements it. The cuTeDSL arm hits the same
+incompatibility, surfaced through a different validator:
 
 ```
 ValueError: Model sets swiglu_limit=10.0, but the explicitly requested
@@ -222,20 +232,22 @@ moe_backend='flashinfer_cutedsl' does not apply the SwiGLU clamp. Use
 'b12x', 'marlin', or 'humming' instead.
 ```
 
-DeepSeek-V4 clamps the routed-expert SwiGLU (`swiglu_limit=10.0`) and vLLM
-refuses a MoE path that would silently skip the clamp — a correctness gate,
-not a perf one. Since the *same* `moe_backend` passes under
-`flashinfer_all2allv` and fails under `nixl_ep`, the gate is evaluated
-against the resolved prepare/finalize path (NIXL-EP selects a batched
-activation format), not against the runner name alone. The log shows
-`Using NixlEPAll2AllManager all2all manager` immediately before the abort.
+DeepSeek-V4 clamps the routed-expert SwiGLU (`swiglu_limit=10.0`), and on the
+batched path vLLM refuses a MoE backend that would silently skip the clamp.
+Both logs show `Using NixlEPAll2AllManager all2all manager` immediately
+before the abort, so NIXL is selected and then the kernel/format check
+rejects the combination.
 
-The error message is itself inconsistent — it lists `flashinfer_cutedsl`
-among the suggested alternatives while rejecting `flashinfer_cutedsl`.
-Worth reporting upstream.
+The cuTeDSL error message is additionally self-inconsistent — it lists
+`flashinfer_cutedsl` among the suggested alternatives while rejecting
+`flashinfer_cutedsl`. Worth reporting upstream.
 
-Consequence: the cuTeDSL-split × NIXL cell is not measurable in vLLM
-0.29.0. cuTeDSL split × FlashInfer all2all and × DeepEP are.
+Consequence: **the entire NIXL-EP column is empty for FlashInfer runners in
+vLLM 0.29.0** — not because NIXL is slow, but because the NVFP4 FlashInfer
+kernels do not implement `batched_experts`. NIXL would need either a
+batched-capable NVFP4 FlashInfer kernel or a non-batched NIXL path. SGLang
+exposes `--moe-a2a-backend nixl` independently and is the place to retry
+this axis.
 
 **`flashinfer_moe_ep_mega_deep_gemm` needs a standalone DeepGEMM; the native
 mega path does not.** On the stock vLLM image the FlashInfer deep_gemm mega
