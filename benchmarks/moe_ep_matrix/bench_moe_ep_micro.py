@@ -667,12 +667,16 @@ def main() -> int:
             host_name=addr, port=port + 1, world_size=world, is_master=(rank == 0)
         )
 
+    dev_name = torch.cuda.get_device_name(dev)
+    major, minor = torch.cuda.get_device_capability(dev)
+    arch = f"sm{major}{minor}"
     if rank == 0:
         print(
             f"model={args.model} geo=hidden{geo['hidden']}/inter{geo['intermediate']}/"
             f"E{geo['num_experts']}/top{geo['top_k']} layers={layers} "
             f"EP={world} quant={args.quant}"
         )
+        print(f"device={dev_name} arch={arch}")
         print(f"token sweep: {plan.tokens}")
 
     rows = []
@@ -709,6 +713,8 @@ def main() -> int:
         for n in plan.tokens:
             row = dict(
                 model=args.model,
+                device=dev_name,
+                arch=arch,
                 config=cfg.name,
                 mode=cfg.mode,
                 comm=cfg.comm,
