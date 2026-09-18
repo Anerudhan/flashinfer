@@ -12,6 +12,10 @@ MODE=${5:-perf}
 
 ROOT=/lustre/fsw/coreai_libraries_cudnn/agopal/dsv4ab
 IMG=$ROOT/img/vllm-0.29.0-arm64.sqsh
+# Overridable so a corrected driver can be rolled out while an older job is
+# still mid-execution of the previous copy (bash reads scripts incrementally,
+# so overwriting a running driver in place can corrupt it).
+DRIVER=${DRIVER:-run_matrix.sh}
 # $$ disambiguates two submissions inside the same second, which otherwise
 # share an output directory.
 STAMP=$(date +%Y%m%d-%H%M%S)-$$
@@ -34,7 +38,7 @@ srun --container-image=${IMG} \
      --container-workdir=${ROOT}/InferenceX \
      bash -lc 'ROOT=${ROOT} OUT=${OUT} MODEL=${MODEL} ARMS="${ARMS}" MODE=${MODE} \
         CONC=\${CONC:-256} MNBT=\${MNBT:-2048} NPROMPTS=\${NPROMPTS:-512} \
-        bash ${ROOT}/run_matrix.sh'
+        bash ${ROOT}/${DRIVER}'
 echo "RESULTS: ${OUT}"
 EOF
 echo "OUT=$OUT"
