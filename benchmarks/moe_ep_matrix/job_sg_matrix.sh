@@ -11,6 +11,8 @@ ARMS=${4:?arms}
 
 ROOT=/lustre/fsw/coreai_libraries_cudnn/agopal/dsv4ab
 IMG=$ROOT/img/sglang-nightly-20260918-arm64.sqsh
+# Overridable so a corrected driver can roll out while an older job runs.
+DRIVER=${DRIVER:-run_sg_matrix.sh}
 STAMP=$(date +%Y%m%d-%H%M%S)-$$
 OUT=$ROOT/results/sgmatrix_${MODEL}_${STAMP}
 mkdir -p "$OUT" "$ROOT/logs"
@@ -31,7 +33,7 @@ srun --container-image=${IMG} \
      --container-workdir=${ROOT} \
      bash -lc 'ROOT=${ROOT} OUT=${OUT} MODEL=${MODEL} ARMS="${ARMS}" \
         CONC=\${CONC:-256} NPROMPTS=\${NPROMPTS:-512} \
-        bash ${ROOT}/run_sg_matrix.sh'
+        bash ${ROOT}/${DRIVER}'
 echo "RESULTS: ${OUT}"
 EOF
 echo "OUT=$OUT"

@@ -24,6 +24,13 @@ export FLASHINFER_WORKSPACE_BASE=$ROOT/cache/flashinfer-ws
 export TRITON_CACHE_DIR=$ROOT/cache/triton
 export PYTHONDONTWRITEBYTECODE=1 PYTHONPYCACHEPREFIX=/tmp/sg-pycache
 
+# The FlashInfer A2A dispatch buffer is sized as
+# SGLANG_FLASHINFER_NUM_MAX_DISPATCH_TOKENS_PER_RANK * ep_size and must cover
+# the largest CuteDSL MoE forward, which is max_prefill_tokens (16384 by
+# default). The stock 1024/rank only yields 4096 at EP=4 and the cutedsl arms
+# refuse to start. 4096/rank * 4 = 16384 exactly covers it.
+export SGLANG_FLASHINFER_NUM_MAX_DISPATCH_TOKENS_PER_RANK=${SGLANG_FLASHINFER_NUM_MAX_DISPATCH_TOKENS_PER_RANK:-4096}
+
 case $MODEL in
   pro)   CKPT_NVFP4=$ROOT/ckpt/deepseek-v4-pro-nvfp4; CKPT_BASE=$ROOT/ckpt/deepseek-v4-pro ;;
   flash) CKPT_NVFP4=$ROOT/ckpt/deepseek-v4-flash-nvfp4; CKPT_BASE=$ROOT/ckpt/deepseek-v4-flash ;;
