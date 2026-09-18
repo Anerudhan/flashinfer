@@ -210,8 +210,10 @@ the report answers both:
    **split** runners (`flashinfer_cutedsl`, `flashinfer_trtllm`), which are
    the only configurations where the transport is actually on the path.
 
-**cuTeDSL *split* is unavailable for DeepSeek-V4 in vLLM 0.29.0.** Every
-`flashinfer_cutedsl` arm aborts during worker init:
+**cuTeDSL split + NIXL-EP hits a SwiGLU-clamp gate (the cuTeDSL runner
+itself is fine).** `flashinfer_cutedsl` serves DeepSeek-V4-Flash normally
+under `flashinfer_all2allv` (512/512 requests, §5.2). Paired with
+`nixl_ep`, the same runner aborts during worker init:
 
 ```
 ValueError: Model sets swiglu_limit=10.0, but the explicitly requested
@@ -221,17 +223,19 @@ moe_backend='flashinfer_cutedsl' does not apply the SwiGLU clamp. Use
 ```
 
 DeepSeek-V4 clamps the routed-expert SwiGLU (`swiglu_limit=10.0`) and vLLM
-refuses a MoE backend that would silently skip the clamp — a correctness
-gate, not a perf one. (The message is itself inconsistent: it lists
-`flashinfer_cutedsl` among the suggested alternatives while rejecting it.
-Worth reporting upstream.) The failure happens *before* the transport is
-exercised — the log shows `Using NixlEPAll2AllManager all2all manager`
-immediately before the abort — so it says nothing about NIXL.
+refuses a MoE path that would silently skip the clamp — a correctness gate,
+not a perf one. Since the *same* `moe_backend` passes under
+`flashinfer_all2allv` and fails under `nixl_ep`, the gate is evaluated
+against the resolved prepare/finalize path (NIXL-EP selects a batched
+activation format), not against the runner name alone. The log shows
+`Using NixlEPAll2AllManager all2all manager` immediately before the abort.
 
-Consequence: in vLLM the split-runner half of the matrix is carried by
-**`flashinfer_trtllm`** alone, and the "cuTeDSL split vs MegaMoE" question is
-answered for SGLang (where `flashinfer_cutedsl` is a listed runner backend)
-rather than vLLM.
+The error message is itself inconsistent — it lists `flashinfer_cutedsl`
+among the suggested alternatives while rejecting `flashinfer_cutedsl`.
+Worth reporting upstream.
+
+Consequence: the cuTeDSL-split × NIXL cell is not measurable in vLLM
+0.29.0. cuTeDSL split × FlashInfer all2all and × DeepEP are.
 
 **FlashInfer all2all is not a `moe_ep` comm backend.** `moe_ep` ships exactly
 two split transports, `nccl_ep` and `nixl_ep`
@@ -305,12 +309,20 @@ ISL 8192 / OSL 1024, `max_concurrency 256`, 512 prompts after 512 warmups.
 KV headroom here is 76.4× (§2.1), so this is the regime that can actually
 show the crossover.
 
-| Compute | Transport | done | tok/s | tok/s/GPU | TTFT ms | TPOT ms | ITL ms |
-|---|---|---:|---:|---:|---:|---:|---:|
-| FI MegaMoE (cuTeDSL) | fused (in-kernel) | 512 | 73,091 | 18,273 | 1,808 | 26.3 | 16.1 |
+| Compute | Transport | done | tok/s | tok/s/GPU | TTFT ms | TPOT ms | ITL ms | vs MegaMoE | GSM8K |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| FI MegaMoE (cuTeDSL) | fused (in-kernel) | 512 | 73,091 | 18,273 | 1,808 | 26.3 | 16.1 | 1.000× | — |
+| cuTeDSL split | FlashInfer all2all | 512 | 62,408 | 15,602 | 1,756 | 31.6 | 18.5 | 0.854× | — |
+| TRTLLM routed | FlashInfer all2all | 512 | 61,795 | 15,449 | 1,641 | 32.4 | 17.7 | 0.845× | **0.875** |
 
-_TRTLLM-routed × {FlashInfer all2all, NIXL, DeepEP} and the two deep_gemm
-mega arms are in flight, with GSM8K enabled._
+At `max_concurrency 256` the fused megakernel leads both split paths by
+**~1.17×** on throughput, and the two split runners are within 1% of each
+other — i.e. at this operating point the choice of *inner kernel*
+(cuTeDSL vs TRTLLM-routed) matters far less than whether the comm is fused
+into the kernel at all. TRTLLM-routed has the best TTFT (1,641 ms), so the
+megakernel's win is a decode-side (TPOT/ITL) win, not a prefill one.
+
+_TRTLLM-routed × {NIXL, DeepEP} and the deep_gemm mega arms are in flight._
 
 ### 5.3 SGLang cross-check
 
