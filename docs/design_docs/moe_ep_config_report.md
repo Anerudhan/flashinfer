@@ -49,11 +49,21 @@ Eager costs **8.2×** throughput on V4-Flash (73,091 → 8,920 tok/s, TPOT
 26.3 → 228.1 ms). Whatever DeepEP's dispatch/combine kernels do, giving up
 cuda-graph capture dominates it by an order of magnitude.
 
-**0.2 Fusing the communication into the kernel is worth ~1.17×.** On
-V4-Flash (GB200, EP=4, ISL 8192 / OSL 1024, conc 256), both megakernels beat
-both split paths by a wide margin — 73.1k–78.0k vs 61.8k–62.4k tok/s. The
-win is decode-shaped: TRTLLM-routed actually posts the *best* TTFT of any arm
-(1,641 ms), and the megakernels take it back on TPOT/ITL.
+**0.1c DeepEP-HT and FlashInfer all2all are the same speed.** Measured
+eager-vs-eager on the same TRTLLM-routed runner: 10,508 vs 10,411 tok/s —
+within 0.9%. DeepEP is marginally ahead on TPOT, FlashInfer all2all on TTFT
+and ITL. There is no throughput argument between the two transports; the
+only decisive difference is the ~8× capture penalty DeepEP-HT forces (0.1b).
+
+**0.2 Fusing the communication into the kernel is worth ~1.17× — but only
+with cuda-graph capture.** On V4-Flash (GB200, EP=4, ISL 8192 / OSL 1024,
+conc 256) both megakernels beat both split paths — 73.1k–78.0k vs
+61.8k–62.4k tok/s. **Run the same comparison eager and the ordering
+inverts**: FI MegaMoE 8,920 vs the split paths' 10,411–10,508 tok/s, i.e. it
+*loses* by ~1.17×. The megakernel's advantage is host-side launch
+amortisation under capture, not intrinsic device efficiency — its ITL is
+still the best of the three in eager mode. Any claim about MegaMoE's speedup
+should state the capture mode it was measured in.
 
 **0.3 Which split inner-kernel you pick barely matters.** cuTeDSL split and
 TRTLLM-routed land within 1% of each other (62,408 vs 61,795 tok/s). The
@@ -517,11 +527,34 @@ DeepEP numbers must therefore be read eager-vs-eager (§5.2c) and never
 against the captured table above; `collect_matrix.py` enforces this by
 placing eager runs in a separate comparison group.
 
-#### 5.2c Eager-mode transport comparison
+#### 5.2c Eager-mode transport comparison — DeepEP vs FlashInfer all2all
 
-_In flight: FI MegaMoE (done — the eager row above), TRTLLM-routed +
-FlashInfer all2all, TRTLLM-routed + DeepEP-HT. All eager, mutually
-comparable._
+All three arms `--enforce-eager`, so these are mutually comparable (and must
+not be read against §5.2's captured table).
+
+| Compute | Transport | done | tok/s | tok/s/GPU | TTFT ms | TPOT ms | ITL ms | vs FI Mega |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| TRTLLM routed | **DeepEP HT** | 512 | **10,508** | 2,627 | 6,679 | 183.7 | 175.1 | **1.178×** |
+| TRTLLM routed | FlashInfer all2all | 512 | 10,411 | 2,603 | 5,637 | 190.1 | 163.6 | 1.167× |
+| FI MegaMoE (cuTeDSL) | fused (in-kernel) | 512 | 8,920 | 2,230 | 6,523 | 228.1 | 149.1 | 1.000× |
+
+Two results, both worth the blog post:
+
+1. **DeepEP-HT and FlashInfer all2all are equivalent — within 0.9%**
+   (10,508 vs 10,411 tok/s) on the same TRTLLM-routed runner. DeepEP is
+   marginally better on TPOT (183.7 vs 190.1 ms), FlashInfer all2all is
+   better on TTFT (5,637 vs 6,679 ms) and ITL (163.6 vs 175.1 ms). There is
+   no throughput case for preferring one transport over the other here; the
+   decisive difference is that DeepEP-HT forfeits cuda-graph capture and
+   therefore ~8× (§5.2b).
+
+2. **The megakernel's advantage is contingent on cuda-graph capture.**
+   Captured, FI MegaMoE beats the split paths by ~1.17× (§5.2). Eager, it
+   *loses* to them by ~1.17×. The fused kernel's win is not an intrinsic
+   arithmetic advantage — it comes from how much better the fused path
+   amortises under capture. Its ITL is still the best of the three in eager
+   (149.1 ms), so what it loses eager is host-side launch amortisation, not
+   device efficiency.
 
 ### 5.3 SGLang cross-check (DeepSeek-V4-Flash, GB200 EP=4)
 
