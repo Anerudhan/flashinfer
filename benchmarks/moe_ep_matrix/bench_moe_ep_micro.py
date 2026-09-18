@@ -27,6 +27,15 @@ config above except ``megamoe_deepgemm`` (DeepGEMM's mega kernel is
 precision each config ran at is emitted in the ``precision`` CSV column rather
 than assumed. ``--quant`` forces a common precision for an apples-to-apples row.
 
+Transport availability is probed at runtime via
+``flashinfer.moe_ep.available_backends()``; a transport the build lacks is
+reported per cell with its reason rather than silently skipped. Note that
+NIXL-EP needs UCX >= 1.21 built with the device API, and the in-tree recipe
+for that (``docker/Dockerfile.flashinfer-nvep``) installs an **amd64** DOCA
+package and hardcodes ``x86_64-linux-gnu`` pkgconfig paths — so on an aarch64
+cluster (GB200/GB300) it requires an arm64 port of that recipe, not just a
+rebuild.
+
 Launch (one process per GPU)::
 
     torchrun --nproc_per_node=4 bench_moe_ep_micro.py --model flash \\
