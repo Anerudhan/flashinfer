@@ -11,7 +11,7 @@ ARMS=${4:?arms}
 
 ROOT=/lustre/fsw/coreai_libraries_cudnn/agopal/dsv4ab
 IMG=$ROOT/img/sglang-nightly-20260918-arm64.sqsh
-STAMP=$(date +%Y%m%d-%H%M%S)
+STAMP=$(date +%Y%m%d-%H%M%S)-$$
 OUT=$ROOT/results/sgmatrix_${MODEL}_${STAMP}
 mkdir -p "$OUT" "$ROOT/logs"
 
@@ -21,6 +21,7 @@ sbatch <<EOF
 #SBATCH -p ${PART}
 #SBATCH -N 1
 #SBATCH --ntasks-per-node=1
+#SBATCH --exclusive
 #SBATCH --time=${TLIM}
 #SBATCH --job-name=coreai_libraries_cudnn-flashinfer.sgmoeep_${MODEL}
 #SBATCH --output=${ROOT}/logs/sgmatrix_${MODEL}_${STAMP}.%j.out

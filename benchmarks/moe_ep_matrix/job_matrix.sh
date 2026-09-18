@@ -12,7 +12,9 @@ MODE=${5:-perf}
 
 ROOT=/lustre/fsw/coreai_libraries_cudnn/agopal/dsv4ab
 IMG=$ROOT/img/vllm-0.29.0-arm64.sqsh
-STAMP=$(date +%Y%m%d-%H%M%S)
+# $$ disambiguates two submissions inside the same second, which otherwise
+# share an output directory.
+STAMP=$(date +%Y%m%d-%H%M%S)-$$
 OUT=$ROOT/results/matrix_${MODEL}_${STAMP}
 mkdir -p "$OUT" "$ROOT/logs"
 
@@ -22,6 +24,7 @@ sbatch <<EOF
 #SBATCH -p ${PART}
 #SBATCH -N 1
 #SBATCH --ntasks-per-node=1
+#SBATCH --exclusive
 #SBATCH --time=${TLIM}
 #SBATCH --job-name=coreai_libraries_cudnn-flashinfer.moeep_${MODEL}
 #SBATCH --output=${ROOT}/logs/matrix_${MODEL}_${STAMP}.%j.out
