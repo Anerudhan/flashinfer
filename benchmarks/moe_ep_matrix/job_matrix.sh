@@ -1,0 +1,37 @@
+#!/bin/bash
+# SLURM submitter for the single-node EP4 MoE-EP matrix.
+#   ./job_matrix.sh <model:pro|flash> <partition> <time> "<arms>" [mode]
+# Example:
+#   ./job_matrix.sh pro gb300 04:00:00 "mega_fi_cutedsl" perf
+set -euo pipefail
+MODEL=${1:?model}
+PART=${2:?partition}
+TLIM=${3:-04:00:00}
+ARMS=${4:?arms}
+MODE=${5:-perf}
+
+ROOT=/lustre/fsw/coreai_libraries_cudnn/agopal/dsv4ab
+IMG=$ROOT/img/vllm-0.29.0-arm64.sqsh
+STAMP=$(date +%Y%m%d-%H%M%S)
+OUT=$ROOT/results/matrix_${MODEL}_${STAMP}
+mkdir -p "$OUT" "$ROOT/logs"
+
+sbatch <<EOF
+#!/bin/bash
+#SBATCH -A coreai_libraries_cudnn
+#SBATCH -p ${PART}
+#SBATCH -N 1
+#SBATCH --ntasks-per-node=1
+#SBATCH --time=${TLIM}
+#SBATCH --job-name=coreai_libraries_cudnn-flashinfer.moeep_${MODEL}
+#SBATCH --output=${ROOT}/logs/matrix_${MODEL}_${STAMP}.%j.out
+set -x
+srun --container-image=${IMG} \
+     --container-mounts=${ROOT}:${ROOT} \
+     --container-workdir=${ROOT}/InferenceX \
+     bash -lc 'ROOT=${ROOT} OUT=${OUT} MODEL=${MODEL} ARMS="${ARMS}" MODE=${MODE} \
+        CONC=\${CONC:-256} MNBT=\${MNBT:-2048} NPROMPTS=\${NPROMPTS:-512} \
+        bash ${ROOT}/run_matrix.sh'
+echo "RESULTS: ${OUT}"
+EOF
+echo "OUT=$OUT"
