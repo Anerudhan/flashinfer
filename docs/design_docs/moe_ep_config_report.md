@@ -41,6 +41,14 @@ not per runner: in vLLM every FlashInfer split runner is down to FlashInfer
 all2all alone, while in SGLang cuTeDSL keeps DeepEP and TRTLLM-routed does
 not. Full support table: §3.4b.
 
+**0.1b DeepEP costs ~8× on this stack, for a reason that has nothing to do
+with DeepEP's kernels.** The only DeepEP variant these runners accept
+(high-throughput) cannot be CUDA-graph captured — it dies in capture with
+`DeepEP error: CPU recv timeout` — so using it forces `--enforce-eager`.
+Eager costs **8.2×** throughput on V4-Flash (73,091 → 8,920 tok/s, TPOT
+26.3 → 228.1 ms). Whatever DeepEP's dispatch/combine kernels do, giving up
+cuda-graph capture dominates it by an order of magnitude.
+
 **0.2 Fusing the communication into the kernel is worth ~1.17×.** On
 V4-Flash (GB200, EP=4, ISL 8192 / OSL 1024, conc 256), both megakernels beat
 both split paths by a wide margin — 73.1k–78.0k vs 61.8k–62.4k tok/s. The
@@ -487,6 +495,33 @@ Three things fall out of this table:
    "native vs FlashInfer megakernel" result and is the one worth chasing —
    it is the reverse of what the FlashInfer MegaMoE integration is aiming
    for, and the gap is decode-latency-shaped.
+
+#### 5.2b The eager-mode tax dominates the DeepEP question
+
+DeepEP-HT is the only DeepEP variant these runners accept, and it cannot be
+CUDA-graph captured (§3.5), so measuring it forces `--enforce-eager` on every
+arm in that comparison. That handicap is enormous:
+
+| FI MegaMoE (cuTeDSL), V4-Flash EP=4, conc 256 | tok/s | TTFT ms | TPOT ms | ITL ms |
+|---|---:|---:|---:|---:|
+| CUDA-graph captured | 73,091 | 1,808 | 26.3 | 16.1 |
+| `--enforce-eager` | 8,920 | 6,523 | 228.1 | 149.1 |
+| **penalty** | **8.2×** | 3.6× | 8.7× | 9.3× |
+
+So on today's stack, selecting DeepEP-HT costs roughly **8× before any
+transport-level difference is even measured**, purely because it gives up
+cuda-graph capture. That is the practically decisive fact about DeepEP here,
+and it dwarfs whatever the dispatch/combine kernels themselves do.
+
+DeepEP numbers must therefore be read eager-vs-eager (§5.2c) and never
+against the captured table above; `collect_matrix.py` enforces this by
+placing eager runs in a separate comparison group.
+
+#### 5.2c Eager-mode transport comparison
+
+_In flight: FI MegaMoE (done — the eager row above), TRTLLM-routed +
+FlashInfer all2all, TRTLLM-routed + DeepEP-HT. All eager, mutually
+comparable._
 
 ### 5.3 SGLang cross-check (DeepSeek-V4-Flash, GB200 EP=4)
 
