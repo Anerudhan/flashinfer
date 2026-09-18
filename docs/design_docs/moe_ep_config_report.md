@@ -151,6 +151,46 @@ MegaMoE tuning knobs (env): `SGLANG_FLASHINFER_MEGAMOE_COMBINE_DTYPE`
 (`bf16`/`mxfp8`/`nvfp4`), `SGLANG_FLASHINFER_MEGAMOE_IN_KERNEL_FC2_REDUCE`,
 `SGLANG_FLASHINFER_MEGAMOE_MAX_TOKENS_PER_RANK`.
 
+### 3.4b The runner × transport matrix is sparse — measured support
+
+The single most important structural result of this study: **MoE runners and
+all2all transports are not freely composable.** They are co-designed pairs,
+and most cells simply are not implemented. Measured on this stack (✅ = ran to
+completion, ✗ = refused at init, — = not applicable):
+
+**vLLM 0.29.0, DeepSeek-V4 NVFP4**
+
+| `--moe-backend` | `flashinfer_all2allv` | `nixl_ep` | `deepep_low_latency` | `deepep_high_throughput` |
+|---|---|---|---|---|
+| `flashinfer_cutedsl` | ✅ | ✗ batched fmt | ✗ batched fmt | _measuring_ |
+| `flashinfer_trtllm` | ✅ | ✗ batched fmt | ✗ batched fmt | _measuring_ |
+| `flashinfer_moe_ep_mega_cutedsl` | — fused | — | — | — |
+| `flashinfer_moe_ep_mega_deep_gemm` | — fused (✗ needs standalone DeepGEMM) | — | — | — |
+| `deep_gemm_mega_moe` | — fused | — | — | — |
+
+**SGLang (nightly `20518d85`), DeepSeek-V4 NVFP4**
+
+| `--moe-runner-backend` | `flashinfer` | `nixl` | `deepep` | `flashinfer_megamoe` |
+|---|---|---|---|---|
+| `flashinfer_cutedsl` | _measuring_ | _measuring_ | _measuring_ | — |
+| `flashinfer_trtllm_routed` | _measuring_ | _measuring_ | ✗ no fused func | — |
+| `flashinfer_megamoe` | — | — | — | ✅ (required pairing) |
+
+The two refusal modes are explicit and worth quoting, because they say the
+same thing in two vocabularies:
+
+- vLLM: `NvFp4 MoE backend 'FLASHINFER_TRTLLM' does not support the
+  deployment configuration since kernel does not support
+  ('batched_experts',) activation format.`
+- SGLang: `Runner backend MoeRunnerBackend.FLASHINFER_TRTLLM_ROUTED requires
+  a fused func for a2a backend deepep, but none is registered.`
+
+In both cases the transport dictates an activation layout (batched vs
+standard) and the MoE kernel must have an implementation for that layout.
+A "try every kernel with every transport" sweep is therefore not a
+meaningful experiment design on today's stack — the honest matrix is the
+support table above plus performance for the cells that exist.
+
 ### 3.5 Axes that do not exist as posed — and why
 
 Four of the requested cells cannot be built as stated. Each is a finding
