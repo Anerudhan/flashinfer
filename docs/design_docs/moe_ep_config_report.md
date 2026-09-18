@@ -529,10 +529,31 @@ server from the previous arm would answer), and a result with
 ```bash
 # on lyris
 cd /lustre/fsw/coreai_libraries_cudnn/agopal/dsv4ab
-CONC=256 NPROMPTS=512 ./job_matrix.sh pro   gb300 04:00:00 "<arms>" both
-CONC=256 NPROMPTS=512 ./job_matrix.sh flash gb200 04:00:00 "<arms>" both
-python3 collect_matrix.py results/matrix_* --csv matrix.csv
+
+# vLLM, EP=4. MODE=both adds a GSM8K pass on the same server process.
+CONC=256 NPROMPTS=512 ./job_matrix.sh flash gb200 05:00:00 \
+    "mega_fi_cutedsl mega_native_deepgemm split_trtllm_fia2a split_cutedsl_fia2a" both
+
+# V4-Pro needs GB300 (851 GB NVFP4 does not fit a GB200 node at EP=4),
+# and EP=8 over two nodes to escape the 5x KV concurrency ceiling.
+CONC=64 ./job_matrix.sh    pro gb300 05:00:00 "<arms>" both
+CONC=256 ./job_matrix_mn.sh pro gb300 05:00:00 "<arms>"
+
+# DeepEP high-throughput only runs eager (it dies in cuda-graph capture),
+# so compare it against an eager trio, never against captured numbers.
+EAGER=1 CONC=256 ./job_matrix.sh flash gb200 05:00:00 \
+    "mega_fi_cutedsl split_trtllm_fia2a split_trtllm_deepep_ht" perf
+
+# SGLang, EP=4
+CONC=256 ./job_sg_matrix.sh flash gb200 05:00:00 "sg_megamoe sg_trtllm_routed_fia2a"
+
+# render (eager rows are grouped separately from captured ones)
+python3 collect_matrix.py results/matrix_* results/sgmatrix_* --csv matrix.csv
 ```
+
+Knobs: `DRIVER=` selects the in-container driver (so a fix can roll out while
+an older job still executes the previous copy), `EAGER=1` drops cuda-graph
+capture, `GPU_MEM_UTIL`, `ACC_N` (GSM8K question count), `MNBT`, `ISL`/`OSL`.
 
 `run_matrix.sh` holds the arm table; `collect_matrix.py` renders the report
 table (throughput, tok/s/GPU, TTFT/TPOT/ITL medians, ratio vs a chosen
