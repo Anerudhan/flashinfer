@@ -711,3 +711,77 @@ Stated plainly so nothing here reads as more complete than it is.
 The last row matters most for the blog post: the 6.7% native-vs-FlashInfer
 MegaMoE gap (§0.4) is the tightest claim in this report and rests on one run
 per arm. It should be repeated before it is published as a number.
+
+---
+
+## 8. vLLM size sweep — TRTLLM routed vs FlashInfer cuTeDSL vs native MegaMoE
+
+§5.2 compares the backends at a **single** operating point (ISL 8192 / OSL
+1024 / conc 256). That is one corner of the serving space, and §5.2c already
+showed the ranking is not stable across conditions — so a single point is not
+enough to say which backend to ship. This section sweeps six serving
+scenarios against the three backends worth shipping.
+
+### 8.1 Configurations
+
+| Report name | `--moe-backend` | `--all2all-backend` | Precision |
+|---|---|---|---|
+| TRTLLM routed | `flashinfer_trtllm` | `flashinfer_all2allv` | NVFP4 (W4A4) |
+| FlashInfer cuTeDSL | `flashinfer_cutedsl` | `flashinfer_all2allv` | NVFP4 (W4A4) |
+| Native MegaMoE | `deep_gemm_mega_moe` | — (fused, see §3.5) | MXFP4/fp8 |
+
+FlashInfer all2all is the only transport the split runners can use on vLLM
+(§3.4b), so it is held fixed and the comparison is purely inner-kernel vs
+fused-megakernel.
+
+### 8.2 Scenario points
+
+DeepSeek-V4-Flash, GB200, EP=4, `--gpu-memory-utilization 0.92`,
+`--max-num-batched-tokens 2048`, cuda-graph capture on (the default), and
+`--max-model-len = ISL + OSL + 256`.
+
+Each point sits **inside** the requested range for its scenario and was
+checked against the measured 723,667-token KV budget per rank (§2.1) so that
+the requested concurrency actually fits rather than silently queueing:
+
+| Scenario | requested ISL / OSL / batch | measured point (ISL / OSL / conc) | prompts | max_model_len | KV-feasible conc |
+|---|---|---|---:|---:|---:|
+| Chat / interactive | 128–1K / 128–1K / 64–128 | 1024 / 1024 / 128 | 512 | 2,304 | ~314 |
+| RAG | 2K–8K / 256–1K / 32–64 | 8192 / 1024 / 64 | 256 | 9,472 | ~76 |
+| Summarization | 4K–16K / 512–1K / 8–16 | 16384 / 1024 / 16 | 64 | 17,664 | ~41 |
+| Code generation | 1K–4K / 512–2K / 8–16 | 4096 / 2048 / 16 | 64 | 6,400 | ~113 |
+| Agentic | 4K–64K / 1K–16K / 16–64 | 16384 / 4096 / 32 | 128 | 20,736 | ~34 |
+| Reasoning | 512–4K / 2K–16K / 8–16 | 4096 / 16384 / 16 | 64 | 20,736 | ~34 |
+
+**Agentic is deliberately not run at the top of its range.** ISL 64K + OSL
+16K needs `max_model_len` 81,920, which the KV budget only supports at ~8
+concurrent — below the requested batch of 16–64, so the run would measure
+queueing rather than the MoE backend. ISL 16K / OSL 4K / conc 32 is inside
+every requested range *and* KV-feasible. Probing the true 64K end needs EP=8
+over two nodes (§7).
+
+The Chat point additionally runs GSM8K, which closes the one correctness gap
+in §5.4 (cuTeDSL split had no accuracy number).
+
+### 8.3 Results
+
+_Runs in flight (lyris jobs 3095612–3095617, one per scenario, three arms
+each). Populated from `collect_matrix.py` as they land._
+
+| Scenario | Backend | tok/s | tok/s/GPU | TTFT ms | TPOT ms | ITL ms | vs MegaMoE |
+|---|---|---|---|---|---|---|---|
+| _pending_ | | | | | | | |
+
+### 8.4 How to read this section
+
+The question §5.2 could not answer is whether the megakernel's win is
+uniform. Three things to look for:
+
+1. **Does the ranking hold at short ISL?** §5.2 ran ISL 8192. Chat (ISL 1024)
+   has far less prefill to amortise the fused path over.
+2. **Does it hold at decode-heavy shapes?** Reasoning (OSL 16384) is almost
+   entirely decode, which is where §5.2 located the megakernel's advantage —
+   so it should be the megakernel's best case.
+3. **Does it hold at low concurrency?** Summarization / codegen / reasoning
+   run conc 16 against §5.2's 256. The SGLang PR's claim that
+   `trtllm_routed` wins at low concurrency is directly testable here.
