@@ -27,10 +27,13 @@ Reference integrations:
 **0.1 The transport axis is mostly a fiction today.** MoE runners and
 all2all transports are *co-designed pairs*, not freely composable choices.
 On DeepSeek-V4 NVFP4, the FlashInfer split runners
-(`flashinfer_cutedsl`, `flashinfer_trtllm`) pair **only** with FlashInfer
-all2all: NIXL-EP and DeepEP-low-latency both require the `batched_experts`
-activation format, which those NVFP4 kernels do not implement, and the server
-refuses at init. SGLang says the same thing in its own words —
+(`flashinfer_cutedsl`, `flashinfer_trtllm`) are effectively limited to
+FlashInfer all2all. NIXL-EP and DeepEP-**low-latency** both require the
+`batched_experts` activation format, which those NVFP4 kernels do not
+implement, and the server refuses at init. DeepEP-**high-throughput** clears
+that gate but then dies inside CUDA-graph capture
+(`DeepEP error: CPU recv timeout`), so it is only measurable in eager mode.
+SGLang states the same constraint in its own vocabulary —
 *"requires a fused func for a2a backend deepep, but none is registered."*
 NCCL-EP is not exposed by either framework at all. Full support table: §3.4b.
 
@@ -205,8 +208,8 @@ completion, ✗ = refused at init, — = not applicable):
 
 | `--moe-backend` | `flashinfer_all2allv` | `nixl_ep` | `deepep_low_latency` | `deepep_high_throughput` |
 |---|---|---|---|---|
-| `flashinfer_cutedsl` | ✅ | ✗ batched fmt | ✗ batched fmt | _measuring_ |
-| `flashinfer_trtllm` | ✅ | ✗ batched fmt | ✗ batched fmt | _measuring_ |
+| `flashinfer_cutedsl` | ✅ | ✗ batched fmt | ✗ batched fmt | ✗ under capture; eager only |
+| `flashinfer_trtllm` | ✅ | ✗ batched fmt | ✗ batched fmt | ✗ under capture; eager only |
 | `flashinfer_moe_ep_mega_cutedsl` | — fused | — | — | — |
 | `flashinfer_moe_ep_mega_deep_gemm` | — fused (✗ needs standalone DeepGEMM) | — | — | — |
 | `deep_gemm_mega_moe` | — fused | — | — | — |
