@@ -380,43 +380,42 @@ def _run_kda_prefill_cute_small_bh(
             workspace_tensors=workspace_tensors,
         )
 
-    if prefill_workspace is None:
-        launch(_allocate_workspace_tensors(q, cu_seqlens))
-    else:
-        with prefill_workspace._lock:
-            stream_ptr = int(torch.cuda.current_stream(q.device).cuda_stream)
-            _bind_workspace(
-                prefill_workspace,
-                device=q.device,
-                stream_ptr=stream_ptr,
-                capturing=capturing,
-                explicit=True,
-            )
-            workspace_tensors = getattr(
-                prefill_workspace,
-                "_kda_prefill_cute_small_bh_workspace_tensors",
-                None,
-            )
-            warmed_signature = getattr(
-                prefill_workspace,
-                "_kda_prefill_cute_small_bh_workspace_signature",
-                None,
-            )
-            if workspace_tensors is None or warmed_signature != signature:
-                if capturing:
-                    raise RuntimeError(
-                        "backend='small-bh' prefill workspace is not warmed for "
-                        "this CUDA graph shape"
-                    )
-                workspace_tensors = _allocate_workspace_tensors(q, cu_seqlens)
-                prefill_workspace.__dict__[
-                    "_kda_prefill_cute_small_bh_workspace_tensors"
-                ] = workspace_tensors
-                prefill_workspace.__dict__[
-                    "_kda_prefill_cute_small_bh_workspace_signature"
-                ] = signature
-            launch(workspace_tensors)
+    workspace = (
+        _get_stream_workspace(q.device)
+        if prefill_workspace is None
+        else prefill_workspace
+    )
+    # Serialize the full launch sequence before another call reuses scratch.
+    with workspace._lock:
+        stream_ptr = int(torch.cuda.current_stream(q.device).cuda_stream)
+        _bind_workspace(
+            workspace,
+            device=q.device,
+            stream_ptr=stream_ptr,
+            capturing=capturing,
+            explicit=prefill_workspace is not None,
+        )
+        workspace_tensors = getattr(
+            workspace, "_kda_prefill_cute_small_bh_workspace_tensors", None
+        )
+        warmed_signature = getattr(
+            workspace, "_kda_prefill_cute_small_bh_workspace_signature", None
+        )
+        if workspace_tensors is None or warmed_signature != signature:
             if capturing:
-                prefill_workspace._captured = True
+                raise RuntimeError(
+                    "backend='small-bh' prefill workspace is not warmed for "
+                    "this CUDA graph shape"
+                )
+            workspace_tensors = _allocate_workspace_tensors(q, cu_seqlens)
+            workspace.__dict__["_kda_prefill_cute_small_bh_workspace_tensors"] = (
+                workspace_tensors
+            )
+            workspace.__dict__["_kda_prefill_cute_small_bh_workspace_signature"] = (
+                signature
+            )
+        launch(workspace_tensors)
+        if capturing:
+            workspace._captured = True
 
     return out, state_buffer if output_final_state else None

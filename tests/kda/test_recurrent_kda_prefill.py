@@ -282,6 +282,17 @@ def _small_bh_run_kwargs(inputs, **overrides):
 
 
 def _mock_small_bh_cuda(monkeypatch):
+    workspace = SimpleNamespace(
+        device=torch.device("cpu"),
+        _lock=threading.Lock(),
+        _bound_stream_ptr=None,
+        _captured=False,
+    )
+    monkeypatch.setattr(small_bh_api, "_get_stream_workspace", lambda device: workspace)
+    monkeypatch.setattr(
+        torch.cuda, "current_stream", lambda device: SimpleNamespace(cuda_stream=17)
+    )
+
     def packed_max_sequence_length(q, cu_seqlens, prefill_workspace):
         offsets = cu_seqlens.tolist()
         return max(
@@ -607,6 +618,7 @@ def test_small_bh_dense_runner_translates_gate_and_reuses_initial_state(
     calls = []
 
     def implementation(*args, **kwargs):
+        assert small_bh_api._get_stream_workspace(args[0].device)._lock.locked()
         calls.append((args, kwargs))
         return kwargs["output"], kwargs["state_output"]
 
@@ -6068,6 +6080,49 @@ def test_small_bh_prefill_matches_reference(
     )
     torch.testing.assert_close(
         actual_state.float(), expected_state.float(), atol=1e-2, rtol=1e-2
+    )
+
+
+@pytest.mark.parametrize("packed", [False, True])
+def test_small_bh_eager_reuses_scratch_per_stream(monkeypatch, small_bh_device, packed):
+    allocate = small_bh_api._allocate_workspace_tensors
+    allocations = []
+
+    def track_allocation(*args):
+        scratch = allocate(*args)
+        allocations.append(scratch)
+        return scratch
+
+    monkeypatch.setattr(small_bh_api, "_allocate_workspace_tensors", track_allocation)
+    streams = [torch.cuda.Stream(device=small_bh_device) for _ in range(2)]
+    cases = [(0, (17, 33)), (0, (25, 25)), (1, (17, 33)), (0, (33, 65))]
+    for index, (stream_id, lengths) in enumerate(cases):
+        inputs = _make_inputs(
+            seq_lens=lengths if packed else (sum(lengths),),
+            num_heads=4,
+            packed=packed,
+            initial_state=True,
+            seed=3200 + index,
+        )
+        expected_output, expected_state = _reference(inputs)
+        stream = streams[stream_id]
+        stream.wait_stream(torch.cuda.current_stream(small_bh_device))
+        with torch.cuda.stream(stream):
+            output, state = recurrent_kda(
+                **_strict_prefill_kwargs(inputs),
+                output_final_state=True,
+                backend="small-bh",
+            )
+        stream.synchronize()
+        assert len(allocations) == (1, 1, 2, 3)[index]
+        torch.testing.assert_close(
+            output.float(), expected_output.float(), atol=1e-2, rtol=1e-2
+        )
+        torch.testing.assert_close(
+            state.float(), expected_state.float(), atol=1e-2, rtol=1e-2
+        )
+    assert all(
+        a.data_ptr() != b.data_ptr() for a, b in zip(*allocations[:2], strict=True)
     )
 
 

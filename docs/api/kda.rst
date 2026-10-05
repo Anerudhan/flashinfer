@@ -469,6 +469,10 @@ Eager calls without ``prefill_workspace`` use an internal serialized workspace
 for the current CUDA stream. This default workspace is eager-only and cannot
 be used during CUDA graph capture.
 
+The small-BH CuTe DSL path also reuses its six scratch tensors in this stream
+workspace. It retains only the latest shape's scratch; a shape change replaces
+it. Returned output and final-state tensors are not cached.
+
 CUDA graph capture requires a caller-owned
 ``RecurrentKDAPrefillWorkspace(device)`` and a preallocated ``output``. The
 workspace owns optional final-state scratch for calls without an initial
