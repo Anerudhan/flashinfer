@@ -293,6 +293,12 @@ unsupported contracts. Decode retains the existing KDA decode routing.
 ``backend="cake"`` and ``backend="cute-dsl"`` select a backend strictly and
 raise when its contract is unsupported.
 
+Small-BH prefill accepts token-row-strided BF16 Q/K/V/G with contiguous
+``[H,128]`` rows and beta with unit head stride. Bases and Q/K/V/G pitches
+must be 16-byte aligned; beta pitches require this alignment when H is a
+multiple of eight. Rows and batches must not overlap. ``auto`` packs inputs
+for other prefill routes when needed, preserving their selection policy.
+
 For multi-token prefill, ``backend="cute-dsl"`` selects a BT=16 CuTe DSL kernel.
 It supports contiguous BF16 Q, K, V, G, and beta with one shared head count and
 head dimension 128, the in-kernel lower-bound gate, fixed or packed-varlen

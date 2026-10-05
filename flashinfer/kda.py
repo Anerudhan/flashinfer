@@ -107,6 +107,10 @@ def recurrent_kda(
     H32 to per-rank H32/H16/H8/H4 without an adapter. Other decode and
     speculative-decode calls retain the CuTe DSL backend.
 
+    Small-BH prefill reads aligned token-row-strided Q/K/V/G and beta directly.
+    Other ``auto`` prefill routes pack these inputs when needed; explicit
+    backends retain their layout requirements.
+
     Args:
         q (torch.Tensor):
             Query of shape ``[B, T, H, K]``, or
@@ -654,6 +658,18 @@ def recurrent_kda(
                 output=output,
                 prefill_workspace=prefill_workspace,
             )
+
+    if backend == "auto" and is_plain_prefill:
+        inputs = (q, k, v, g, beta)
+        if all(isinstance(x, torch.Tensor) for x in inputs) and any(
+            not x.is_contiguous() for x in inputs
+        ):
+            if output is not None:
+                _kda_prefill._check_output_does_not_overlap_inputs(
+                    output, q=q, k=k, v=v, g=g, beta=beta, initial_state=initial_state
+                )
+            # Keep packing out of the small-BH path when its layout is supported.
+            q, k, v, g, beta = (x.contiguous() for x in inputs)
 
     # SM120 is an architecture-specific CuTe DSL implementation. Try it before
     # the SM100-family CuTe DSL path, whose eligibility check rejects SM120.

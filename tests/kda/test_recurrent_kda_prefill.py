@@ -7235,8 +7235,9 @@ def test_frozen_prefill_cuda_graph_workspaces_are_isolated(flash_kda_device):
 
 @pytest.mark.parametrize("packed", [False, True])
 @pytest.mark.parametrize("state_mode", ["none", "input", "output", "both"])
+@pytest.mark.parametrize("strided", [False, True])
 def test_small_bh_combined_host_matches_separate_launches(
-    monkeypatch, small_bh_device, packed, state_mode
+    monkeypatch, small_bh_device, packed, state_mode, strided
 ):
     from flashinfer.kda_kernels import kda_chunked_bt16_small_bh as kernels
 
@@ -7249,6 +7250,11 @@ def test_small_bh_combined_host_matches_separate_launches(
     ]
     g.mul_(0.1)
     beta = torch.randn(shape[:-1], device=q.device, dtype=q.dtype)
+    if strided:
+        q, k, v = torch.randn(
+            (*shape[:-2], 3, h, d), device=q.device, dtype=q.dtype
+        ).unbind(-3)
+        beta = torch.randn((*shape[:-2], 3216), device=q.device, dtype=q.dtype)[..., :h]
     bias = 0.1 * torch.randn((h, d), device=q.device)
     a_log = 0.1 * torch.randn(h, device=q.device)
     offsets = (
@@ -7319,3 +7325,126 @@ def test_small_bh_combined_host_matches_separate_launches(
         else:
             assert actual_state is expected_state is None
     assert len(compiled_calls) == 2
+
+
+@pytest.mark.parametrize("packed", [False, True])
+@pytest.mark.parametrize("num_heads", [6, 16])
+def test_small_bh_strided_prefill_replays_without_input_copies(
+    small_bh_device, packed, num_heads
+):
+    inputs = _make_inputs(
+        seq_lens=(17, 33) if packed else (65, 65),
+        num_heads=num_heads,
+        packed=packed,
+        initial_state=True,
+        seed=3141,
+    )
+    batch, tokens, h, d = inputs["q"].shape
+    qkv = torch.empty(
+        batch, tokens, 3, h, d, device=small_bh_device, dtype=torch.bfloat16
+    )
+    for name, view in zip(("q", "k", "v"), qkv.unbind(2), strict=True):
+        view.copy_(inputs[name])
+        inputs[name] = view
+    beta = torch.empty(
+        batch, tokens, 6416, device=small_bh_device, dtype=torch.bfloat16
+    )[..., :h]
+    beta.copy_(inputs["beta"])
+    inputs["beta"] = beta
+    seed = inputs["initial_state"].clone()
+    output = torch.empty_like(inputs["q"], memory_format=torch.contiguous_format)
+    workspace = RecurrentKDAPrefillWorkspace(small_bh_device)
+    stream = torch.cuda.Stream(device=small_bh_device)
+    stream.wait_stream(torch.cuda.current_stream(small_bh_device))
+
+    def run():
+        return recurrent_kda(
+            **_strict_prefill_kwargs(inputs),
+            backend="small-bh",
+            output=output,
+            output_final_state=True,
+            prefill_workspace=workspace,
+        )
+
+    with torch.cuda.stream(stream):
+        run()
+    stream.synchronize()
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph, stream=stream):
+        run()
+    with torch.cuda.stream(stream):
+        qkv.mul_(0.875)
+        beta.mul_(0.75)
+        if packed:
+            inputs["cu_seqlens"][1] += 1
+        expected_inputs = {
+            key: value.clone() if isinstance(value, torch.Tensor) else value
+            for key, value in inputs.items()
+        }
+        expected_inputs["initial_state"] = seed.clone()
+        expected, expected_state = recurrent_kda(
+            **_strict_prefill_kwargs(expected_inputs),
+            backend="small-bh",
+            output_final_state=True,
+        )
+        inputs["initial_state"].copy_(seed)
+        graph.replay()
+    stream.synchronize()
+    assert torch.isfinite(expected).all()
+    assert torch.equal(output, expected)
+    assert torch.equal(inputs["initial_state"], expected_state)
+    with torch.profiler.profile(
+        activities=[torch.profiler.ProfilerActivity.CPU]
+    ) as prof:
+        run()
+    assert "aten::contiguous" not in {event.key for event in prof.key_averages()}
+
+
+@pytest.mark.parametrize("layout", ["unaligned", "head_stride", "row_overlap"])
+def test_small_bh_rejects_unsupported_input_layout(small_bh_device, layout):
+    inputs = _make_inputs(seq_lens=(33,), num_heads=8, packed=True, seed=3411)
+    q = inputs["q"]
+    if layout == "unaligned":
+        inputs["q"] = torch.empty(q.numel() + 1, device=q.device, dtype=q.dtype)[
+            1:
+        ].view(q.shape)
+    elif layout == "head_stride":
+        inputs["q"] = torch.empty(1, 33, 8, 256, device=q.device, dtype=q.dtype)[
+            ..., ::2
+        ]
+    else:
+        inputs["q"] = q[:, :1].expand_as(q)
+    with pytest.raises(ValueError, match="does not support"):
+        recurrent_kda(**_strict_prefill_kwargs(inputs), backend="small-bh")
+
+
+@pytest.mark.parametrize("overlap", [False, True])
+def test_auto_small_bh_fallback_packs_without_hiding_output_overlap(
+    monkeypatch, overlap
+):
+    inputs = _small_bh_inputs()
+    for name in ("q", "k", "v", "g", "beta"):
+        tensor = inputs[name]
+        view = torch.empty(*tensor.shape[:-1], tensor.shape[-1] * 2)[..., ::2]
+        view.copy_(tensor)
+        inputs[name] = view
+    calls = []
+    monkeypatch.setattr(kda_api, "is_cute_dsl_available", lambda: False)
+    monkeypatch.setattr(
+        kda_prefill_cute_api, "_is_cute_dsl_kda_prefill_eligible", lambda **kwargs: True
+    )
+    monkeypatch.setattr(
+        kda_prefill_cute_api,
+        "_run_cute_dsl_kda_prefill",
+        lambda **kwargs: calls.append(kwargs),
+    )
+    kwargs = dict(**inputs, backend="auto", output=inputs["q"] if overlap else None)
+    if overlap:
+        with pytest.raises(ValueError, match="overlap"):
+            recurrent_kda(**kwargs)
+        assert not calls
+    else:
+        recurrent_kda(**kwargs)
+        for name in ("q", "k", "v", "g", "beta"):
+            assert calls[0][name].is_contiguous()
+            assert torch.equal(calls[0][name], inputs[name])

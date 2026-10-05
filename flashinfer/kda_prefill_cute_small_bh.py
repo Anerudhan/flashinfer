@@ -45,6 +45,28 @@ def _is_valid_lower_bound(lower_bound: Optional[float]) -> bool:
     return math.isfinite(value) and value < 0.0
 
 
+def _has_supported_row_strides(tensor: torch.Tensor) -> bool:
+    if tensor.stride(-1) != 1 or tensor.data_ptr() % 16:
+        return False
+    if tensor.ndim == 4:
+        if tensor.stride(-2) != tensor.shape[-1]:
+            return False
+        row_size = tensor.shape[-2] * tensor.shape[-1]
+        alignment = 8
+    else:
+        row_size = tensor.shape[-1]
+        alignment = 8 if row_size % 8 == 0 else 1
+    return (
+        tensor.stride(1) >= row_size
+        and tensor.stride(1) % alignment == 0
+        and tensor.stride(0) % alignment == 0
+        and (
+            tensor.shape[0] == 1
+            or tensor.stride(0) >= tensor.shape[1] * tensor.stride(1)
+        )
+    )
+
+
 def _is_kda_prefill_cute_small_bh_eligible(
     *,
     q: torch.Tensor,
@@ -102,7 +124,7 @@ def _is_kda_prefill_cute_small_bh_eligible(
         not q.is_cuda
         or get_compute_capability(q.device) not in _SUPPORTED_COMPUTE_CAPABILITIES
         or q.dtype != torch.bfloat16
-        or not q.is_contiguous()
+        or not _has_supported_row_strides(q)
     ):
         return False
 
@@ -115,7 +137,7 @@ def _is_kda_prefill_cute_small_bh_eligible(
             or tensor.device != q.device
             or tensor.dtype != q.dtype
             or tensor.shape != q.shape
-            or not tensor.is_contiguous()
+            or not _has_supported_row_strides(tensor)
         ):
             return False
     if (
@@ -123,8 +145,7 @@ def _is_kda_prefill_cute_small_bh_eligible(
         or beta.device != q.device
         or beta.dtype != q.dtype
         or beta.shape != (batch_size, token_count, num_heads)
-        or not beta.is_contiguous()
-        or beta.data_ptr() % 16 != 0
+        or not _has_supported_row_strides(beta)
     ):
         return False
     if (
@@ -283,7 +304,7 @@ def _run_kda_prefill_cute_small_bh(
                 "CUDA graph capture requires a preallocated output tensor for "
                 "backend='small-bh' recurrent_kda prefill"
             )
-        out = torch.empty_like(q)
+        out = torch.empty_like(q, memory_format=torch.contiguous_format)
     else:
         out = output
     _check_output_does_not_overlap_inputs(
