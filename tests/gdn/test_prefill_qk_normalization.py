@@ -128,6 +128,38 @@ def test_qk_normalization_reference_and_graph(dtype, d):
         torch.testing.assert_close(actual, reference, rtol=0, atol=0)
 
 
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16, torch.float32])
+@pytest.mark.parametrize("layout", ["qkv", "mixed", "batch_gap", "unaligned"])
+def test_qk_normalization_strided_inputs_and_replay(dtype, layout):
+    device = _supported_device()
+    from flashinfer.gdn_kernels.qk_l2norm import normalize_qk
+
+    torch.manual_seed(2026)
+    storage = torch.randn(2, 39, 3, 6, 128, device=device, dtype=dtype)
+    q, k = storage[:, :37, 0], storage[:, :37, 1]
+    if layout != "batch_gap":
+        q, k = q[:1], k[:1]
+    if layout == "mixed":
+        k = k.contiguous()
+    elif layout == "unaligned":
+        raw = torch.randn(q.numel() + 1, device=device, dtype=dtype)
+        k = raw[1:].view(q.shape)
+
+    expected = normalize_qk(q.contiguous(), k.contiguous())
+    outputs = normalize_qk(q, k)
+    for actual, reference in zip(outputs, expected, strict=True):
+        torch.testing.assert_close(actual, reference, rtol=0, atol=0)
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        graph_outputs = normalize_qk(q, k)
+    q.mul_(0.5)
+    k.add_(0.25)
+    graph.replay()
+    expected = normalize_qk(q.contiguous(), k.contiguous())
+    for actual, reference in zip(graph_outputs, expected, strict=True):
+        torch.testing.assert_close(actual, reference, rtol=0, atol=0)
+
+
 @pytest.mark.parametrize(
     "dtype,d",
     [

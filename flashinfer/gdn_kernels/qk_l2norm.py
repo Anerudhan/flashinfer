@@ -59,10 +59,15 @@ def _rows_norm(
 
     for group in cutlass.range_constexpr(rows_per_group):
         row = first_row + group * row_groups
-        if row < x.shape[0]:
+        if row < y.shape[0]:
             for chunk in cutlass.range_constexpr(chunks):
                 col = (chunk * lanes + lane) * vector_elems
-                offset = cute.assume(row * d + col, divby=vector_elems)
+                offset = row * d + col
+                if cutlass.const_expr(cute.rank(x) == 3):
+                    offset = (
+                        row // x.shape[1] * x.stride[0] + row % x.shape[1] * d + col
+                    )
+                offset = cute.assume(offset, divby=vector_elems)
                 gx = cute.make_tensor(
                     x.iterator + offset, cute.make_layout(vector_elems)
                 )
@@ -80,7 +85,7 @@ def _rows_norm(
     for group in cutlass.range_constexpr(rows_per_group):
         row = first_row + group * row_groups
         ss = Float32(0)
-        if row < x.shape[0]:
+        if row < y.shape[0]:
             for i in cutlass.range_constexpr(values):
                 r[i, group] = Float32(rx[group * values + i])
                 ss = ss + r[i, group] * r[i, group]
@@ -107,7 +112,7 @@ def _rows_norm(
 
     for group in cutlass.range_constexpr(rows_per_group):
         row = first_row + group * row_groups
-        if row < x.shape[0]:
+        if row < y.shape[0]:
             for i in cutlass.range_constexpr(values):
                 ry[group * values + i] = y.element_type(r[i, group] * inv[group])
             for chunk in cutlass.range_constexpr(chunks):
@@ -169,7 +174,7 @@ def _launch(
     rows_per_group: cutlass.Constexpr[int],
     stream,
 ):
-    rows = cutlass.max(q.shape[0], k.shape[0])
+    rows = cutlass.max(oq.shape[0], ok.shape[0])
     rows_per_block = (256 // lanes) * rows_per_group
     _kernel(q, k, oq, ok, d, lanes, vector_elems, rows_per_group).launch(
         grid=(cute.ceil_div(rows, rows_per_block), 2, 1),
@@ -179,7 +184,9 @@ def _launch(
 
 
 @functools.cache
-def _compiled(dtype: torch.dtype, d: int, target_key: tuple[int, str]):
+def _compiled(
+    dtype: torch.dtype, d: int, target_key: tuple[int, str], input_ranks=(2, 2)
+):
     device = torch.device("cuda", target_key[0])
     dt = {
         torch.bfloat16: cutlass.BFloat16,
@@ -199,16 +206,50 @@ def _compiled(dtype: torch.dtype, d: int, target_key: tuple[int, str]):
             dt, (m, d), stride_order=(1, 0), assumed_align=16
         )
 
-    q, k, oq, ok = fake(qm), fake(km), fake(qm), fake(km)
+    def input_tensor(m, rank):
+        if rank == 2:
+            return fake(m)
+        return cute.runtime.make_fake_tensor(
+            dt,
+            (cute.sym_int(64), cute.sym_int(64), d),
+            (cute.sym_int64(divisibility=vector_elems), d, 1),
+            assumed_align=16,
+        )
+
+    q, k = input_tensor(qm, input_ranks[0]), input_tensor(km, input_ranks[1])
+    oq, ok = fake(qm), fake(km)
     stream = cute.runtime.make_fake_stream(use_tvm_ffi_env_stream=True)
     return build_and_load_cute_dsl_kernel(
         "gdn_qk_l2norm",
-        make_kernel_name("qk_l2norm", dtype, d, target_arch(target_key)),
+        make_kernel_name("qk_l2norm", dtype, d, input_ranks, target_arch(target_key)),
         lambda: cute.compile[gdn_compile_options(device, cute.EnableTVMFFI(True))](
             _launch, q, k, oq, ok, d, lanes, vector_elems, rows_per_group, stream
         ),
         extra_key_files=(__file__,),
     )
+
+
+def _input_rows(x: torch.Tensor, d: int) -> torch.Tensor:
+    if not x.is_contiguous():
+        vector_elems = min(16 // x.element_size(), d & -d)
+        if (
+            x.ndim in (3, 4)
+            and x.numel() > 0
+            and x.stride(-1) == 1
+            and x.stride(-2) == d
+            and x.stride(-3) % vector_elems == 0
+            and x.data_ptr() % 16 == 0
+            and (
+                x.ndim == 3
+                or x.shape[0] == 1
+                or x.stride(0) == x.shape[1] * x.stride(1)
+            )
+        ):
+            return x.view(-1, x.shape[-2], d)
+        x = x.contiguous()
+    if x.data_ptr() % 16:
+        x = x.clone()
+    return x.view(-1, d)
 
 
 def normalize_qk(q: torch.Tensor, k: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -230,19 +271,14 @@ def normalize_qk(q: torch.Tensor, k: torch.Tensor) -> tuple[torch.Tensor, torch.
         raise ValueError("Q/K normalization requires a positive row size up to 64 KiB")
     if not q.is_cuda or q.device != k.device:
         raise ValueError("Q/K normalization requires inputs on the same CUDA device")
-    q = q.contiguous()
-    k = k.contiguous()
-    # Contiguous views can still have an unaligned storage offset.
-    if q.data_ptr() % 16:
-        q = q.clone()
-    if k.data_ptr() % 16:
-        k = k.clone()
-    oq = torch.empty_like(q)
-    ok = torch.empty_like(k)
+    oq = torch.empty(q.shape, dtype=q.dtype, device=q.device)
+    ok = torch.empty(k.shape, dtype=k.dtype, device=k.device)
     if q.numel() == 0 and k.numel() == 0:
         return oq, ok
+    q = _input_rows(q, d)
+    k = _input_rows(k, d)
     with torch.cuda.device(q.device):
-        _compiled(q.dtype, d, gdn_device_target(q.device).compile_key)(
-            q.reshape(-1, d), k.reshape(-1, d), oq.reshape(-1, d), ok.reshape(-1, d)
-        )
+        _compiled(
+            q.dtype, d, gdn_device_target(q.device).compile_key, (q.ndim, k.ndim)
+        )(q, k, oq.view(-1, d), ok.view(-1, d))
     return oq, ok
