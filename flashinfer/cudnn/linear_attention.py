@@ -155,8 +155,8 @@ def _la_graph_key_fn(
 
 if CUDNN_AVAILABLE:
 
-    @cudnn.jit(heur_modes=[cudnn.heur_mode.A])
     @cudnn.graph_cache(key_fn=_la_graph_key_fn)
+    @cudnn.jit(heur_modes=[cudnn.heur_mode.A])
     def _build_la_graph(
         family: str,
         q: torch.Tensor,

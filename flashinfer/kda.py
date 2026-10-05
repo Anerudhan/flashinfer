@@ -68,6 +68,7 @@ def recurrent_kda(
     checkpoint_every_n_tokens: int = 0,
     checkpoint_state_indices: Optional[torch.Tensor] = None,
     *,
+    output_state: Optional[torch.Tensor] = None,
     disable_state_update: bool = False,
     correction_cache: Optional[torch.Tensor] = None,
     kg_cache: Optional[torch.Tensor] = None,
@@ -193,6 +194,11 @@ def recurrent_kda(
             ``cu_seqlens``. If ``None``, a new tensor is allocated. Frozen
             prefill requires storage disjoint from Q, K, V, G, beta, and
             ``initial_state``.
+        output_state (Optional[torch.Tensor]):
+            Separate final-state buffer for ``backend="cudnn"``. When supplied,
+            ``initial_state`` is read-only. The buffers must not overlap.
+            The buffer is written even when ``output_final_state=False``.
+            Other backends reject this argument.
         initial_state_source (Optional[torch.Tensor]):
             Optional read-only committed state pool ``[N0, HV, V, K]``. When
             provided, token 0 is loaded from this pool instead of
@@ -330,6 +336,8 @@ def recurrent_kda(
             "backend must be 'auto', 'cute-dsl', 'cute-dsl-persistent', 'tirx', 'ptx', 'cake', 'small-bh', or 'cudnn', "
             f"got {backend!r}"
         )
+    if output_state is not None and backend != "cudnn":
+        raise NotImplementedError("output_state requires backend='cudnn'")
     if backend == "cute-dsl-persistent":
         from .kda_prefill_persistent import _run_persistent_kda
 
@@ -511,6 +519,7 @@ def recurrent_kda(
             cu_seqlens=cu_seqlens,
             beta_is_logit=beta_is_logit,
             output=output,
+            output_state=output_state,
         )
     if checkpoint_state_indices is not None and backend == "cake":
         raise ValueError("checkpoint_state_indices is supported only by CuTe DSL")

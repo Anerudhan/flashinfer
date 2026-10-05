@@ -155,8 +155,7 @@ def _run(inputs, **kwargs):
 
 
 def _run_direct(inputs, **kwargs):
-    """The cuDNN entry point, for the knobs ``recurrent_kda`` has no argument
-    for: ``output_state`` and ``batch_invariant``."""
+    """The cuDNN entry point also exposes ``batch_invariant``."""
     return cudnn_recurrent_kda(
         inputs["q"],
         inputs["k"],
@@ -567,7 +566,25 @@ def test_cudnn_backend_advances_initial_state_without_returning_it():
     assert out.isfinite().all()
 
 
-def test_cudnn_backend_writes_a_separate_output_state_without_touching_the_input():
+@pytest.mark.parametrize(
+    "backend",
+    ["auto", "cute-dsl", "cake", "small-bh", "ptx", "tirx", "cute-dsl-persistent"],
+)
+def test_other_backends_reject_separate_output_state(backend):
+    inputs = _make_inputs([1], 1, initial_state=True)
+    with pytest.raises(NotImplementedError, match="output_state requires"):
+        recurrent_kda(
+            **inputs,
+            output_state=torch.empty_like(inputs["initial_state"]),
+            backend=backend,
+        )
+
+
+@pytest.mark.parametrize("run", [_run, _run_direct])
+@pytest.mark.parametrize("return_state", [False, True])
+def test_cudnn_backend_writes_a_separate_output_state_without_touching_the_input(
+    run, return_state
+):
     inputs = _make_inputs([384], 4, initial_state=True, seed=19)
     device = torch.device("cuda")
     state = inputs["initial_state"]
@@ -575,14 +592,20 @@ def test_cudnn_backend_writes_a_separate_output_state_without_touching_the_input
     output_state = torch.empty(
         1, 4, HEAD_DIM, HEAD_DIM, dtype=state.dtype, device=device
     )
-    _, final_state = _run_direct(
+    ref_out, ref_state = _serial(inputs)
+    out, final_state = run(
         inputs,
         initial_state=state,
         output_state=output_state,
-        **_gate_kwargs(inputs, output_final_state=True),
+        **_gate_kwargs(inputs, output_final_state=return_state),
     )
-    assert final_state.data_ptr() == output_state.data_ptr()
+    if return_state:
+        assert final_state.data_ptr() == output_state.data_ptr()
+    else:
+        assert final_state is None
     assert torch.equal(state, before), "initial_state was advanced anyway"
+    assert_rel_close("output", out, ref_out, SERIAL_TOLERANCE)
+    assert_rel_close("final_state", output_state, ref_state, SERIAL_TOLERANCE)
 
 
 def test_cudnn_backend_honors_output_buffer():
@@ -623,7 +646,8 @@ def test_cudnn_backend_is_deterministic():
     assert torch.equal(first[1], second[1])
 
 
-def test_cudnn_backend_replays_under_cuda_graph_capture():
+@pytest.mark.parametrize("run", [_run, _run_direct])
+def test_cudnn_backend_replays_under_cuda_graph_capture(run):
     device = torch.device("cuda")
     inputs = _make_inputs([512], 4, seed=103)
     out = torch.empty_like(inputs["v"])
@@ -633,13 +657,13 @@ def test_cudnn_backend_replays_under_cuda_graph_capture():
     capture_stream = torch.cuda.Stream(device=device)
     capture_stream.wait_stream(torch.cuda.current_stream(device))
     with torch.cuda.stream(capture_stream):
-        _run_direct(inputs, **call)
+        run(inputs, **call)
     capture_stream.synchronize()
     eager_out, eager_state = out.clone(), state.clone()
 
     graph = torch.cuda.CUDAGraph()
     with torch.cuda.graph(graph, stream=capture_stream):
-        captured_out, captured_state = _run_direct(inputs, **call)
+        captured_out, captured_state = run(inputs, **call)
     out.fill_(float("nan"))
     state.fill_(float("nan"))
     graph.replay()
