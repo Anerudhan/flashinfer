@@ -7393,10 +7393,12 @@ def test_small_bh_strided_prefill_replays_without_input_copies(
     assert torch.isfinite(expected).all()
     assert torch.equal(output, expected)
     assert torch.equal(inputs["initial_state"], expected_state)
-    with torch.profiler.profile(
-        activities=[torch.profiler.ProfilerActivity.CPU]
-    ) as prof:
-        run()
+    with torch.cuda.stream(stream):
+        with torch.profiler.profile(
+            activities=[torch.profiler.ProfilerActivity.CPU]
+        ) as prof:
+            run()
+        stream.synchronize()
     assert "aten::contiguous" not in {event.key for event in prof.key_averages()}
 
 
@@ -7438,7 +7440,14 @@ def test_auto_small_bh_fallback_packs_without_hiding_output_overlap(
         "_run_cute_dsl_kda_prefill",
         lambda **kwargs: calls.append(kwargs),
     )
-    kwargs = dict(**inputs, backend="auto", output=inputs["q"] if overlap else None)
+    kwargs = dict(
+        **inputs,
+        backend="auto",
+        output=inputs["q"] if overlap else None,
+        lower_bound=-5.0,
+        use_gate_in_kernel=True,
+        beta_is_logit=True,
+    )
     if overlap:
         with pytest.raises(ValueError, match="overlap"):
             recurrent_kda(**kwargs)
