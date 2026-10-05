@@ -7247,9 +7247,10 @@ def test_small_bh_combined_host_matches_separate_launches(
         torch.randn(shape, device=small_bh_device, dtype=torch.bfloat16)
         for _ in range(4)
     ]
+    g.mul_(0.1)
     beta = torch.randn(shape[:-1], device=q.device, dtype=q.dtype)
-    bias = torch.randn((h, d), device=q.device)
-    a_log = torch.randn(h, device=q.device)
+    bias = 0.1 * torch.randn((h, d), device=q.device)
+    a_log = 0.1 * torch.randn(h, device=q.device)
     offsets = (
         torch.tensor([0, 17, t], device=q.device, dtype=torch.int64) if packed else None
     )
@@ -7310,8 +7311,10 @@ def test_small_bh_combined_host_matches_separate_launches(
                 workspace_tensors=workspace,
             )
         stream.synchronize()
+        assert torch.isfinite(expected).all()
         assert torch.equal(actual, expected)
         if has_output:
+            assert torch.isfinite(expected_state).all()
             assert torch.equal(actual_state, expected_state)
         else:
             assert actual_state is expected_state is None
