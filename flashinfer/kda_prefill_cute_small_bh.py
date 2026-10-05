@@ -46,24 +46,22 @@ def _is_valid_lower_bound(lower_bound: Optional[float]) -> bool:
 
 
 def _has_supported_row_strides(tensor: torch.Tensor) -> bool:
-    if tensor.stride(-1) != 1 or tensor.data_ptr() % 16:
+    shape, strides = tensor.shape, tensor.stride()
+    if strides[-1] != 1 or tensor.data_ptr() % 16:
         return False
-    if tensor.ndim == 4:
-        if tensor.stride(-2) != tensor.shape[-1]:
+    if len(shape) == 4:
+        if strides[-2] != shape[-1]:
             return False
-        row_size = tensor.shape[-2] * tensor.shape[-1]
+        row_size = shape[-2] * shape[-1]
         alignment = 8
     else:
-        row_size = tensor.shape[-1]
+        row_size = shape[-1]
         alignment = 8 if row_size % 8 == 0 else 1
     return (
-        tensor.stride(1) >= row_size
-        and tensor.stride(1) % alignment == 0
-        and tensor.stride(0) % alignment == 0
-        and (
-            tensor.shape[0] == 1
-            or tensor.stride(0) >= tensor.shape[1] * tensor.stride(1)
-        )
+        strides[1] >= row_size
+        and strides[1] % alignment == 0
+        and strides[0] % alignment == 0
+        and (shape[0] == 1 or strides[0] >= shape[1] * strides[1])
     )
 
 
@@ -96,7 +94,10 @@ def _is_kda_prefill_cute_small_bh_eligible(
 ) -> bool:
     """Whether the small-BH CuTe DSL KDA prefill kernel can serve a call."""
 
-    if not isinstance(q, torch.Tensor) or q.ndim != 4 or q.shape[1] <= 1:
+    if not isinstance(q, torch.Tensor):
+        return False
+    shape, device, dtype = q.shape, q.device, q.dtype
+    if len(shape) != 4 or shape[1] <= 1:
         return False
     if (
         any(
@@ -123,12 +124,12 @@ def _is_kda_prefill_cute_small_bh_eligible(
         return False
     if (
         not q.is_cuda
-        or get_compute_capability(q.device) not in _SUPPORTED_COMPUTE_CAPABILITIES
-        or q.dtype != torch.bfloat16
+        or get_compute_capability(device) not in _SUPPORTED_COMPUTE_CAPABILITIES
+        or dtype != torch.bfloat16
     ):
         return False
 
-    batch_size, token_count, num_heads, head_dim = q.shape
+    batch_size, token_count, num_heads, head_dim = shape
     if batch_size <= 0 or token_count <= 1 or num_heads <= 0 or head_dim != _HEAD_DIM:
         return False
     if cu_seqlens is None:
@@ -139,7 +140,7 @@ def _is_kda_prefill_cute_small_bh_eligible(
         if (
             batch_size != 1
             or not isinstance(cu_seqlens, torch.Tensor)
-            or cu_seqlens.device != q.device
+            or cu_seqlens.device != device
             or cu_seqlens.dtype not in (torch.int32, torch.int64)
             or cu_seqlens.ndim != 1
             or not cu_seqlens.is_contiguous()
@@ -149,7 +150,7 @@ def _is_kda_prefill_cute_small_bh_eligible(
         num_sequences = cu_seqlens.numel() - 1
         if seq_order is not None and (
             not isinstance(seq_order, torch.Tensor)
-            or seq_order.device != q.device
+            or seq_order.device != device
             or seq_order.dtype != torch.int32
             or seq_order.shape != (num_sequences,)
             or not seq_order.is_contiguous()
@@ -160,7 +161,7 @@ def _is_kda_prefill_cute_small_bh_eligible(
     if (
         auto_select
         and 2 * num_sequences * num_heads
-        > torch.cuda.get_device_properties(q.device).multi_processor_count
+        > torch.cuda.get_device_properties(device).multi_processor_count
     ):
         return False
     if not _has_supported_row_strides(q):
@@ -169,23 +170,23 @@ def _is_kda_prefill_cute_small_bh_eligible(
     for tensor in (k, v, g):
         if (
             not isinstance(tensor, torch.Tensor)
-            or tensor.device != q.device
-            or tensor.dtype != q.dtype
-            or tensor.shape != q.shape
+            or tensor.device != device
+            or tensor.dtype != dtype
+            or tensor.shape != shape
             or not _has_supported_row_strides(tensor)
         ):
             return False
     if (
         not isinstance(beta, torch.Tensor)
-        or beta.device != q.device
-        or beta.dtype != q.dtype
+        or beta.device != device
+        or beta.dtype != dtype
         or beta.shape != (batch_size, token_count, num_heads)
         or not _has_supported_row_strides(beta)
     ):
         return False
     if (
         not isinstance(A_log, torch.Tensor)
-        or A_log.device != q.device
+        or A_log.device != device
         or A_log.dtype != torch.float32
         or A_log.shape != (num_heads,)
         or not A_log.is_contiguous()
@@ -193,7 +194,7 @@ def _is_kda_prefill_cute_small_bh_eligible(
         return False
     if (
         not isinstance(dt_bias, torch.Tensor)
-        or dt_bias.device != q.device
+        or dt_bias.device != device
         or dt_bias.dtype != torch.float32
         or dt_bias.numel() != num_heads * _HEAD_DIM
         or dt_bias.ndim not in (1, 2)
@@ -205,8 +206,8 @@ def _is_kda_prefill_cute_small_bh_eligible(
 
     if initial_state is not None and (
         not isinstance(initial_state, torch.Tensor)
-        or initial_state.device != q.device
-        or initial_state.dtype != q.dtype
+        or initial_state.device != device
+        or initial_state.dtype != dtype
         or initial_state.shape != (num_sequences, num_heads, _HEAD_DIM, _HEAD_DIM)
         or not initial_state.is_contiguous()
         or initial_state.data_ptr() % 16 != 0
@@ -214,9 +215,9 @@ def _is_kda_prefill_cute_small_bh_eligible(
         return False
     if output is not None and (
         not isinstance(output, torch.Tensor)
-        or output.device != q.device
-        or output.dtype != q.dtype
-        or output.shape != q.shape
+        or output.device != device
+        or output.dtype != dtype
+        or output.shape != shape
         or not output.is_contiguous()
     ):
         return False
