@@ -472,6 +472,9 @@ be used during CUDA graph capture.
 The small-BH CuTe DSL path also reuses its six scratch tensors in this stream
 workspace. It retains only the latest shape's scratch; a shape change replaces
 it. Returned output and final-state tensors are not cached.
+Packed small-BH launches use the total token count as a sequence-length bound;
+the kernels skip tiles beyond each sequence's device-side length. No offset
+readback is needed, including when packed boundaries change between replays.
 
 CUDA graph capture requires a caller-owned
 ``RecurrentKDAPrefillWorkspace(device)`` and a preallocated ``output``. The

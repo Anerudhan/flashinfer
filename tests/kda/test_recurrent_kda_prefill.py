@@ -293,18 +293,7 @@ def _mock_small_bh_cuda(monkeypatch):
         torch.cuda, "current_stream", lambda device: SimpleNamespace(cuda_stream=17)
     )
 
-    def packed_max_sequence_length(q, cu_seqlens, prefill_workspace):
-        offsets = cu_seqlens.tolist()
-        return max(
-            right - left for left, right in zip(offsets, offsets[1:], strict=False)
-        )
-
     monkeypatch.setattr(torch.cuda, "is_current_stream_capturing", lambda: False)
-    monkeypatch.setattr(
-        small_bh_api,
-        "_packed_max_sequence_length",
-        packed_max_sequence_length,
-    )
 
 
 def _mock_small_bh_kernel(monkeypatch, implementation):
@@ -688,35 +677,11 @@ def test_small_bh_packed_runner_uses_flat_abi_and_padded_workspace(
     assert kwargs["output"].data_ptr() == output.data_ptr()
     assert kwargs["cu_seqlens"] is cu_seqlens
     assert kwargs["cu_seqlens"].dtype == torch.int64
-    assert kwargs["max_seqlen"] == 2
+    assert kwargs["max_seqlen"] == 3
     qd, kd, kr, mqk, mkk, gk = kwargs["workspace_tensors"]
     assert qd.shape == kd.shape == kr.shape == (131, 8, 128)
     assert mqk.shape == mkk.shape == (9, 8, 16, 16)
     assert gk.shape == (9, 8, 128)
-
-
-def test_small_bh_packed_max_sequence_length_reuses_warmed_metadata(monkeypatch):
-    workspace = SimpleNamespace(
-        _packed_metadata_lock=threading.Lock(),
-        _packed_metadata_tensor=None,
-        _packed_metadata_signature=None,
-        _packed_metadata=None,
-    )
-    q = torch.empty((1, 6, 8, 128), dtype=torch.bfloat16)
-    cu_seqlens = torch.tensor([0, 1, 2, 6], dtype=torch.int64)
-    monkeypatch.setattr(small_bh_api, "_get_stream_workspace", lambda device: workspace)
-    monkeypatch.setattr(torch.cuda, "is_current_stream_capturing", lambda: False)
-
-    assert small_bh_api._packed_max_sequence_length(q, cu_seqlens, None) == 4
-    warmed_metadata = workspace._packed_metadata
-    assert small_bh_api._packed_max_sequence_length(q, cu_seqlens, None) == 4
-    assert workspace._packed_metadata is warmed_metadata
-
-    monkeypatch.setattr(torch.cuda, "is_current_stream_capturing", lambda: True)
-    assert small_bh_api._packed_max_sequence_length(q, cu_seqlens, workspace) == 4
-    cu_seqlens.copy_(torch.tensor([0, 3, 4, 6], dtype=torch.int64))
-    with pytest.raises(RuntimeError, match="metadata is not warmed"):
-        small_bh_api._packed_max_sequence_length(q, cu_seqlens, workspace)
 
 
 def test_public_prefill_backend_option_routes_to_cute_dsl(monkeypatch):
@@ -6126,6 +6091,37 @@ def test_small_bh_eager_reuses_scratch_per_stream(monkeypatch, small_bh_device, 
     )
 
 
+@pytest.mark.parametrize("seq_lens", [(66,), (17, 49), (3, 5, 17, 41)])
+def test_small_bh_packed_prefill_does_not_sync(small_bh_device, seq_lens):
+    inputs = _make_inputs(
+        seq_lens=seq_lens, num_heads=4, packed=True, initial_state=True, seed=3300
+    )
+    output = torch.empty_like(inputs["q"])
+    recurrent_kda(**_strict_prefill_kwargs(inputs), output=output, backend="small-bh")
+    with torch.inference_mode():
+        inputs["cu_seqlens"] = inputs["cu_seqlens"].clone()
+        if len(seq_lens) > 1:
+            inputs["cu_seqlens"][1] += 1
+        expected_output, expected_state = _reference(inputs)
+        previous_mode = torch.cuda.get_sync_debug_mode()
+        torch.cuda.set_sync_debug_mode("error")
+        try:
+            actual_output, actual_state = recurrent_kda(
+                **_strict_prefill_kwargs(inputs),
+                output=output,
+                output_final_state=True,
+                backend="small-bh",
+            )
+        finally:
+            torch.cuda.set_sync_debug_mode(previous_mode)
+    torch.testing.assert_close(
+        actual_output.float(), expected_output.float(), atol=1e-2, rtol=1e-2
+    )
+    torch.testing.assert_close(
+        actual_state.float(), expected_state.float(), atol=1e-2, rtol=1e-2
+    )
+
+
 def test_small_bh_prefill_cuda_graph_replay_matches_reference(small_bh_device):
     inputs = _make_inputs(
         seq_lens=(17, 33),
@@ -6162,6 +6158,9 @@ def test_small_bh_prefill_cuda_graph_replay_matches_reference(small_bh_device):
     with torch.cuda.stream(capture_stream):
         inputs["q"].mul_(0.875)
         inputs["beta"].add_(0.125)
+        inputs["cu_seqlens"].copy_(
+            torch.tensor([0, 40, 50], device=small_bh_device, dtype=torch.int64)
+        )
         inputs["initial_state"].copy_(initial_state_seed)
         output.fill_(float("nan"))
     capture_stream.synchronize()

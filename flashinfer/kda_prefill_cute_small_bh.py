@@ -24,7 +24,6 @@ import torch
 from .kda_prefill import (
     RecurrentKDAPrefillWorkspace,
     _bind_workspace,
-    _cached_packed_task_metadata,
     _check_output_does_not_overlap_inputs,
     _get_stream_workspace,
 )
@@ -206,29 +205,6 @@ def _workspace_signature(
     )
 
 
-def _packed_max_sequence_length(
-    q: torch.Tensor,
-    cu_seqlens: torch.Tensor,
-    prefill_workspace: Optional[RecurrentKDAPrefillWorkspace],
-) -> int:
-    """Resolve the exact packed maximum once, then reuse the workspace cache."""
-
-    metadata_workspace = (
-        _get_stream_workspace(q.device)
-        if prefill_workspace is None
-        else prefill_workspace
-    )
-    metadata = _cached_packed_task_metadata(
-        metadata_workspace,
-        cu_seqlens,
-        total_tokens=q.shape[0] * q.shape[1],
-        num_heads=q.shape[2],
-        sm_count=0,
-        build_persistent_plan=False,
-    )
-    return max(metadata[4])
-
-
 def _allocate_workspace_tensors(
     q: torch.Tensor,
     cu_seqlens: Optional[torch.Tensor],
@@ -347,11 +323,8 @@ def _run_kda_prefill_cute_small_bh(
     gate_lower_bound = lower_bound is not None
     gate_scale = float(lower_bound) if gate_lower_bound else 1.0
     signature = _workspace_signature(q, cu_seqlens)
-    max_sequence_length = (
-        None
-        if cu_seqlens is None
-        else _packed_max_sequence_length(q, cu_seqlens, prefill_workspace)
-    )
+    # Packed tiles beyond each device-side sequence length are skipped.
+    max_sequence_length = q.shape[1] if cu_seqlens is not None else None
 
     def launch(workspace_tensors: tuple[torch.Tensor, ...]) -> None:
         if cu_seqlens is None:
