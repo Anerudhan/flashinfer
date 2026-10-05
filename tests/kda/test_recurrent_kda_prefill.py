@@ -7369,6 +7369,13 @@ def test_small_bh_strided_prefill_replays_without_input_copies(
     with torch.cuda.stream(stream):
         run()
     stream.synchronize()
+    with torch.cuda.stream(stream):
+        with torch.profiler.profile(
+            activities=[torch.profiler.ProfilerActivity.CPU]
+        ) as prof:
+            run()
+        stream.synchronize()
+    assert "aten::contiguous" not in {event.key for event in prof.key_averages()}
     graph = torch.cuda.CUDAGraph()
     with torch.cuda.graph(graph, stream=stream):
         run()
@@ -7393,13 +7400,6 @@ def test_small_bh_strided_prefill_replays_without_input_copies(
     assert torch.isfinite(expected).all()
     assert torch.equal(output, expected)
     assert torch.equal(inputs["initial_state"], expected_state)
-    with torch.cuda.stream(stream):
-        with torch.profiler.profile(
-            activities=[torch.profiler.ProfilerActivity.CPU]
-        ) as prof:
-            run()
-        stream.synchronize()
-    assert "aten::contiguous" not in {event.key for event in prof.key_averages()}
 
 
 @pytest.mark.parametrize("layout", ["unaligned", "head_stride", "row_overlap"])
