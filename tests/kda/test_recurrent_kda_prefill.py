@@ -7231,3 +7231,88 @@ def test_frozen_prefill_cuda_graph_workspaces_are_isolated(flash_kda_device):
             atol=1e-2,
             rtol=1e-2,
         )
+
+
+@pytest.mark.parametrize("packed", [False, True])
+@pytest.mark.parametrize("state_mode", ["none", "input", "output", "both"])
+def test_small_bh_combined_host_matches_separate_launches(
+    monkeypatch, small_bh_device, packed, state_mode
+):
+    from flashinfer.kda_kernels import kda_chunked_bt16_small_bh as kernels
+
+    torch.manual_seed(3412)
+    h, d, t = 6, 128, 81
+    shape = (t, h, d) if packed else (2, t, h, d)
+    q, k, v, g = [
+        torch.randn(shape, device=small_bh_device, dtype=torch.bfloat16)
+        for _ in range(4)
+    ]
+    beta = torch.randn(shape[:-1], device=q.device, dtype=q.dtype)
+    bias = torch.randn((h, d), device=q.device)
+    a_log = torch.randn(h, device=q.device)
+    offsets = (
+        torch.tensor([0, 17, t], device=q.device, dtype=torch.int64) if packed else None
+    )
+    state = torch.randn((2, h, d, d), device=q.device, dtype=q.dtype) * 0.01
+    state_input = state if state_mode in ("input", "both") else None
+    has_output = state_mode in ("output", "both")
+    workspace = kernels.chunk_kda_fwd_k1(q, k, g, beta, bias, a_log, cu_seqlens=offsets)
+    compiled_calls = []
+    compile_forward = kernels._compile_forward
+
+    def track_compile(*args):
+        compiled_calls.append(args)
+        return compile_forward(*args)
+
+    monkeypatch.setattr(kernels, "_compile_forward", track_compile)
+    stream = torch.cuda.Stream(device=q.device)
+    stream.wait_stream(torch.cuda.current_stream(q.device))
+    for iteration in range(2):
+        with torch.cuda.stream(stream):
+            if iteration:
+                q = q.clone().mul_(0.875)
+                k, v, g = k.clone(), v.clone(), g.clone()
+                if packed:
+                    offsets = torch.tensor(
+                        [0, 33, t], device=q.device, dtype=torch.int64
+                    )
+            kwargs = dict(
+                gate_lower_bound=bool(iteration),
+                gate_scale=-5.0 if iteration else 1.0,
+                cu_seqlens=offsets,
+                return_state=has_output,
+                transpose_state=bool(iteration),
+                state_input=state_input,
+            )
+            expected, expected_state = kernels.chunk_kda_fwd(
+                q,
+                k,
+                v,
+                g,
+                beta,
+                bias,
+                a_log,
+                **kwargs,
+                output=torch.empty_like(v),
+                state_output=torch.empty_like(state) if has_output else None,
+            )
+            actual, actual_state = kernels.chunk_kda_fwd(
+                q,
+                k,
+                v,
+                g,
+                beta,
+                bias,
+                a_log,
+                **kwargs,
+                output=torch.empty_like(v),
+                state_output=torch.empty_like(state) if has_output else None,
+                workspace_tensors=workspace,
+            )
+        stream.synchronize()
+        assert torch.equal(actual, expected)
+        if has_output:
+            assert torch.equal(actual_state, expected_state)
+        else:
+            assert actual_state is expected_state is None
+    assert len(compiled_calls) == 2

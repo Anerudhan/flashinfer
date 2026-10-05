@@ -2946,6 +2946,142 @@ def _compile_k2(
     )
 
 
+class ChunkKdaFwd:
+    def __init__(self, k1, k2):
+        self.k1 = k1
+        self.k2 = k2
+
+    @cute.jit
+    def __call__(
+        self,
+        q,
+        k,
+        v,
+        g,
+        beta,
+        dt_bias,
+        a_log,
+        qd,
+        kd,
+        kr,
+        mqk,
+        mkk,
+        gk,
+        output,
+        state_input,
+        state_output,
+        cu_seqlens,
+        max_seqlen: cutlass.Int32,
+        scale: cutlass.Float32,
+        gate_scale: cutlass.Float32,
+        stream,
+    ):
+        self.k1(
+            q,
+            k,
+            g,
+            beta,
+            dt_bias,
+            a_log,
+            qd,
+            kd,
+            kr,
+            mqk,
+            mkk,
+            gk,
+            scale,
+            gate_scale,
+            cu_seqlens,
+            max_seqlen,
+            stream,
+        )
+        self.k2(
+            qd,
+            kd,
+            kr,
+            v,
+            mqk,
+            mkk,
+            gk,
+            output,
+            state_input,
+            state_output,
+            cu_seqlens,
+            stream,
+        )
+
+
+@functools.cache
+def _compile_forward(
+    dtype: torch.dtype,
+    seqlen_dtype: torch.dtype,
+    state_dtype: torch.dtype,
+    d: int,
+    h: int,
+    bv: int,
+    has_state_input: bool,
+    has_state_output: bool,
+    transpose_state: bool,
+    gate_lower_bound: bool,
+    is_varlen: bool,
+    max_active_clusters: int,
+):
+    cu_dtype = _cute_dtype(dtype)
+    b, bs, t, tp, nt = (cute.sym_int() for _ in range(5))
+    feature: tuple[object, ...]
+    padded_feature: tuple[object, ...]
+    beta_shape: tuple[object, ...]
+    matrix: tuple[object, ...]
+    gate: tuple[object, ...]
+    if is_varlen:
+        feature = (t, h, d)
+        padded_feature = (tp, h, d)
+        beta_shape = (t, h)
+        matrix = (nt, h, _BT, _BT)
+        gate = (nt, h, d)
+        cu_seqlens = _fake(_cute_dtype(seqlen_dtype), (bs,))
+    else:
+        feature = padded_feature = (b, t, h, d)
+        beta_shape = (b, t, h)
+        matrix = (b, nt, h, _BT, _BT)
+        gate = (b, nt, h, d)
+        cu_seqlens = None
+    state = (b, h, d, d)
+    kernel = ChunkKdaFwd(
+        ChunkKdaFwdK1(
+            D=d,
+            H=h,
+            BT=_BT,
+            gate_lower_bound=gate_lower_bound,
+            max_active_clusters=max_active_clusters,
+        ),
+        ChunkKdaFwdK2(D=d, BT=_BT, BV=bv, transpose_S=transpose_state),
+    )
+    return cute.compile(
+        kernel,
+        _fake_stride(cu_dtype, feature),
+        _fake_stride(cu_dtype, feature),
+        _fake(cu_dtype, feature),
+        _fake_stride(cu_dtype, feature),
+        _fake_stride(cu_dtype, beta_shape),
+        _fake(cutlass.Float32, (h, d)),
+        _fake(cutlass.Float32, (h,)),
+        *(_fake(cu_dtype, padded_feature) for _ in range(3)),
+        _fake(cu_dtype, matrix),
+        _fake(cu_dtype, matrix),
+        _fake(cutlass.Float32, gate),
+        _fake(cu_dtype, feature),
+        _fake(_cute_dtype(state_dtype), state) if has_state_input else None,
+        _fake(_cute_dtype(state_dtype), state) if has_state_output else None,
+        cu_seqlens,
+        cutlass.Int32(1),
+        cutlass.Float32(1),
+        cutlass.Float32(1),
+        cute.runtime.make_fake_stream(use_tvm_ffi_env_stream=True),
+        options="--enable-tvm-ffi",
+    )
+
+
 def chunk_kda_fwd_k1(
     q: torch.Tensor,
     k: torch.Tensor,
@@ -3113,6 +3249,57 @@ def chunk_kda_fwd(
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     if max_active_clusters <= 0:
         max_active_clusters = get_max_active_clusters(1)
+    if (
+        workspace_tensors is not None
+        and output is not None
+        and (not return_state or state_output is not None)
+    ):
+        # Submit both kernels through one host entry without changing their order.
+        is_varlen = cu_seqlens is not None
+        h, d = q.shape[-2:]
+        if d != 128:
+            raise ValueError(f"unsupported d: {d}")
+        b = len(cu_seqlens) - 1 if is_varlen else q.shape[0]
+        t = q.shape[-3]
+        state_dtype = (
+            state_input.dtype
+            if state_input is not None
+            else state_output.dtype
+            if state_output is not None
+            else q.dtype
+        )
+        compiled = _compile_forward(
+            q.dtype,
+            cu_seqlens.dtype if is_varlen else torch.int32,
+            state_dtype,
+            d,
+            h,
+            d if b * h * 2 > max_active_clusters else d // 2,
+            state_input is not None,
+            state_output is not None,
+            transpose_state,
+            gate_lower_bound,
+            is_varlen,
+            max_active_clusters,
+        )
+        compiled(
+            q,
+            k,
+            v,
+            g,
+            beta,
+            dt_bias,
+            a_log,
+            *workspace_tensors,
+            output,
+            state_input,
+            state_output,
+            cu_seqlens,
+            t if not is_varlen or max_seqlen is None else max_seqlen,
+            d**-0.5 if scale is None else scale,
+            gate_scale,
+        )
+        return output, state_output
     qd, kd, kr, mqk, mkk, gk = chunk_kda_fwd_k1(
         q,
         k,
@@ -3149,6 +3336,7 @@ def chunk_kda_fwd(
 def clear_compilation_cache() -> None:
     _compile_k1.cache_clear()
     _compile_k2.cache_clear()
+    _compile_forward.cache_clear()
 
 
 __all__ = [
