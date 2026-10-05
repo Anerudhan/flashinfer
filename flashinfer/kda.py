@@ -626,20 +626,14 @@ def recurrent_kda(
                 state_checkpoints=state_checkpoints,
                 checkpoint_cu_starts=checkpoint_cu_starts,
                 checkpoint_every_n_tokens=checkpoint_every_n_tokens,
+                auto_select=backend == "auto",
             )
         )
         if backend == "small-bh" and not eligible:
             raise ValueError(
                 "backend='small-bh' does not support this recurrent_kda prefill contract"
             )
-        use_small_bh = backend == "small-bh"
-        if eligible and backend == "auto":
-            batch_size = q.shape[0] if cu_seqlens is None else cu_seqlens.numel() - 1
-            use_small_bh = (
-                2 * batch_size * q.shape[2]
-                <= torch.cuda.get_device_properties(q.device).multi_processor_count
-            )
-        if eligible and use_small_bh:
+        if eligible:
             assert A_log is not None
             assert dt_bias is not None
             return _kda_prefill_cute_small_bh._run_kda_prefill_cute_small_bh(

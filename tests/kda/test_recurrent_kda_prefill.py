@@ -446,82 +446,40 @@ def test_frozen_state_rejects_unsupported_backends(monkeypatch, backend):
         )
 
 
-def test_auto_backend_selects_small_bh_at_half_sm_count_boundary(monkeypatch):
-    sentinel = (object(), object())
+@pytest.mark.parametrize("packed", [False, True])
+@pytest.mark.parametrize("backend", ["auto", "small-bh"])
+@pytest.mark.parametrize("sm_count", [7, 8])
+def test_small_bh_work_size_policy(
+    monkeypatch, small_bh_device, packed, backend, sm_count
+):
+    inputs = _make_inputs(seq_lens=(3, 3), num_heads=2, packed=packed, seed=5314)
+    major, minor = get_compute_capability(inputs["q"].device)
     monkeypatch.setattr(kda_api, "is_cute_dsl_available", lambda: True)
-    monkeypatch.setattr(
-        small_bh_api,
-        "_is_kda_prefill_cute_small_bh_eligible",
-        lambda **kwargs: True,
-    )
-    monkeypatch.setattr(
-        small_bh_api,
-        "_run_kda_prefill_cute_small_bh",
-        lambda **kwargs: sentinel,
-    )
     monkeypatch.setattr(
         torch.cuda,
         "get_device_properties",
-        lambda device=None: SimpleNamespace(multi_processor_count=16),
-    )
-
-    assert (
-        recurrent_kda(
-            **_small_bh_inputs(batch_size=2, num_heads=4),
-            use_gate_in_kernel=True,
-            lower_bound=-5.0,
-            beta_is_logit=True,
-            backend="auto",
-        )
-        is sentinel
-    )
-
-
-def test_auto_backend_uses_logical_batch_size_for_packed_input(monkeypatch):
-    fallback = (object(), object())
-    monkeypatch.setattr(kda_api, "is_cute_dsl_available", lambda: True)
-    monkeypatch.setattr(
-        small_bh_api,
-        "_is_kda_prefill_cute_small_bh_eligible",
-        lambda **kwargs: True,
+        lambda device=None: SimpleNamespace(
+            multi_processor_count=sm_count, major=major, minor=minor
+        ),
     )
     monkeypatch.setattr(
-        small_bh_api,
-        "_run_kda_prefill_cute_small_bh",
-        lambda **kwargs: pytest.fail("small-bh must not run above half the SM count"),
+        kda_prefill_api, "_sm120_kda_prefill_is_eligible", lambda **kwargs: False
     )
     monkeypatch.setattr(
-        torch.cuda,
-        "get_device_properties",
-        lambda device=None: SimpleNamespace(multi_processor_count=5),
+        kda_prefill_cute_api, "_is_cute_dsl_kda_prefill_eligible", lambda **kwargs: True
+    )
+    small_result, regular_result = object(), object()
+    monkeypatch.setattr(
+        small_bh_api, "_run_kda_prefill_cute_small_bh", lambda **kwargs: small_result
     )
     monkeypatch.setattr(
-        kda_api._kda_prefill,
-        "_sm120_kda_prefill_is_eligible",
-        lambda **kwargs: False,
-    )
-    monkeypatch.setattr(
-        kda_api._kda_prefill_cute,
-        "_is_cute_dsl_kda_prefill_eligible",
-        lambda **kwargs: True,
-    )
-    monkeypatch.setattr(
-        kda_api._kda_prefill_cute,
+        kda_prefill_cute_api,
         "_run_cute_dsl_kda_prefill",
-        lambda **kwargs: fallback,
+        lambda **kwargs: regular_result,
     )
-
-    inputs = _small_bh_inputs(token_count=6, num_heads=2)
-    assert (
-        recurrent_kda(
-            **inputs,
-            use_gate_in_kernel=True,
-            lower_bound=-5.0,
-            cu_seqlens=torch.tensor([0, 2, 4, 6], dtype=torch.int64),
-            beta_is_logit=True,
-            backend="auto",
-        )
-        is fallback
+    result = recurrent_kda(**_strict_prefill_kwargs(inputs), backend=backend)
+    assert result is (
+        small_result if backend == "small-bh" or sm_count == 8 else regular_result
     )
 
 

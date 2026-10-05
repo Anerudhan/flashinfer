@@ -92,6 +92,7 @@ def _is_kda_prefill_cute_small_bh_eligible(
     state_checkpoints: Optional[torch.Tensor],
     checkpoint_cu_starts: Optional[torch.Tensor],
     checkpoint_every_n_tokens: int,
+    auto_select: bool = False,
 ) -> bool:
     """Whether the small-BH CuTe DSL KDA prefill kernel can serve a call."""
 
@@ -124,13 +125,47 @@ def _is_kda_prefill_cute_small_bh_eligible(
         not q.is_cuda
         or get_compute_capability(q.device) not in _SUPPORTED_COMPUTE_CAPABILITIES
         or q.dtype != torch.bfloat16
-        or not _has_supported_row_strides(q)
     ):
         return False
 
     batch_size, token_count, num_heads, head_dim = q.shape
     if batch_size <= 0 or token_count <= 1 or num_heads <= 0 or head_dim != _HEAD_DIM:
         return False
+    if cu_seqlens is None:
+        num_sequences = batch_size
+        if seq_order is not None:
+            return False
+    else:
+        if (
+            batch_size != 1
+            or not isinstance(cu_seqlens, torch.Tensor)
+            or cu_seqlens.device != q.device
+            or cu_seqlens.dtype not in (torch.int32, torch.int64)
+            or cu_seqlens.ndim != 1
+            or not cu_seqlens.is_contiguous()
+            or cu_seqlens.numel() <= 1
+        ):
+            return False
+        num_sequences = cu_seqlens.numel() - 1
+        if seq_order is not None and (
+            not isinstance(seq_order, torch.Tensor)
+            or seq_order.device != q.device
+            or seq_order.dtype != torch.int32
+            or seq_order.shape != (num_sequences,)
+            or not seq_order.is_contiguous()
+        ):
+            return False
+
+    # Reject auto work sizes before inspecting the remaining tensor layouts.
+    if (
+        auto_select
+        and 2 * num_sequences * num_heads
+        > torch.cuda.get_device_properties(q.device).multi_processor_count
+    ):
+        return False
+    if not _has_supported_row_strides(q):
+        return False
+
     for tensor in (k, v, g):
         if (
             not isinstance(tensor, torch.Tensor)
@@ -167,31 +202,6 @@ def _is_kda_prefill_cute_small_bh_eligible(
         return False
     if dt_bias.ndim == 2 and dt_bias.shape != (num_heads, _HEAD_DIM):
         return False
-
-    if cu_seqlens is None:
-        num_sequences = batch_size
-        if seq_order is not None:
-            return False
-    else:
-        if (
-            batch_size != 1
-            or not isinstance(cu_seqlens, torch.Tensor)
-            or cu_seqlens.device != q.device
-            or cu_seqlens.dtype not in (torch.int32, torch.int64)
-            or cu_seqlens.ndim != 1
-            or not cu_seqlens.is_contiguous()
-            or cu_seqlens.numel() <= 1
-        ):
-            return False
-        num_sequences = cu_seqlens.numel() - 1
-        if seq_order is not None and (
-            not isinstance(seq_order, torch.Tensor)
-            or seq_order.device != q.device
-            or seq_order.dtype != torch.int32
-            or seq_order.shape != (num_sequences,)
-            or not seq_order.is_contiguous()
-        ):
-            return False
 
     if initial_state is not None and (
         not isinstance(initial_state, torch.Tensor)
