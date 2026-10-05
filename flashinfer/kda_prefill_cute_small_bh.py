@@ -358,18 +358,13 @@ def _run_kda_prefill_cute_small_bh(
     max_sequence_length = q.shape[1] if cu_seqlens is not None else None
 
     def launch(workspace_tensors: tuple[torch.Tensor, ...]) -> None:
-        if cu_seqlens is None:
-            q_arg, k_arg, v_arg, g_arg, beta_arg, out_arg = q, k, v, g, beta, out
-        else:
-            q_arg, k_arg, v_arg, g_arg = q[0], k[0], v[0], g[0]
-            beta_arg, out_arg = beta[0], out[0]
         chunk_kda_fwd(
-            q_arg,
-            k_arg,
-            v_arg,
-            g_arg,
-            beta_arg,
-            dt_bias.reshape(q.shape[2], _HEAD_DIM),
+            q,
+            k,
+            v,
+            g,
+            beta,
+            dt_bias,
             A_log,
             scale=scale_value,
             gate_scale=gate_scale,
@@ -378,7 +373,7 @@ def _run_kda_prefill_cute_small_bh(
             transpose_state=True,
             cu_seqlens=cu_seqlens,
             max_seqlen=max_sequence_length,
-            output=out_arg,
+            output=out,
             state_input=initial_state,
             state_output=state_buffer,
             workspace_tensors=workspace_tensors,

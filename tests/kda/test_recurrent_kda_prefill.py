@@ -600,7 +600,7 @@ def test_small_bh_dense_runner_translates_gate_and_reuses_initial_state(
     assert len(kwargs["workspace_tensors"]) == 6
 
 
-def test_small_bh_packed_runner_uses_flat_abi_and_padded_workspace(
+def test_small_bh_packed_runner_reuses_inputs_and_padded_workspace(
     monkeypatch,
 ):
     _mock_small_bh_cuda(monkeypatch)
@@ -630,9 +630,9 @@ def test_small_bh_packed_runner_uses_flat_abi_and_padded_workspace(
     assert result[1] is state
     args, kwargs = calls[0]
     for index, name in enumerate(("q", "k", "v", "g", "beta")):
-        assert args[index].data_ptr() == inputs[name].data_ptr()
-        assert args[index].ndim == inputs[name].ndim - 1
-    assert kwargs["output"].data_ptr() == output.data_ptr()
+        assert args[index] is inputs[name]
+    assert args[5] is inputs["dt_bias"]
+    assert kwargs["output"] is output
     assert kwargs["cu_seqlens"] is cu_seqlens
     assert kwargs["cu_seqlens"].dtype == torch.int64
     assert kwargs["max_seqlen"] == 3
@@ -7191,16 +7191,18 @@ def test_frozen_prefill_cuda_graph_workspaces_are_isolated(flash_kda_device):
         )
 
 
-@pytest.mark.parametrize("packed", [False, True])
+@pytest.mark.parametrize("layout", ["fixed", "packed", "packed_batch_dim"])
 @pytest.mark.parametrize("state_mode", ["none", "input", "output", "both"])
 @pytest.mark.parametrize("strided", [False, True])
+@pytest.mark.parametrize("flat_bias", [False, True])
 def test_small_bh_combined_host_matches_separate_launches(
-    monkeypatch, small_bh_device, packed, state_mode, strided
+    monkeypatch, small_bh_device, layout, state_mode, strided, flat_bias
 ):
     from flashinfer.kda_kernels import kda_chunked_bt16_small_bh as kernels
 
     torch.manual_seed(3412)
     h, d, t = 6, 128, 81
+    packed = layout != "fixed"
     shape = (t, h, d) if packed else (2, t, h, d)
     q, k, v, g = [
         torch.randn(shape, device=small_bh_device, dtype=torch.bfloat16)
@@ -7261,21 +7263,24 @@ def test_small_bh_combined_host_matches_separate_launches(
                 output=torch.empty_like(v),
                 state_output=torch.empty_like(state) if has_output else None,
             )
+            args = (q, k, v, g, beta)
+            out = torch.empty_like(v)
+            if layout == "packed_batch_dim":
+                args = tuple(x.unsqueeze(0) for x in args)
+                out = out.unsqueeze(0)
             actual, actual_state = kernels.chunk_kda_fwd(
-                q,
-                k,
-                v,
-                g,
-                beta,
-                bias,
+                *args,
+                bias.flatten() if flat_bias else bias,
                 a_log,
                 **kwargs,
-                output=torch.empty_like(v),
+                output=out,
                 state_output=torch.empty_like(state) if has_output else None,
                 workspace_tensors=workspace,
             )
         stream.synchronize()
         assert torch.isfinite(expected).all()
+        if layout == "packed_batch_dim":
+            actual = actual[0]
         assert torch.equal(actual, expected)
         if has_output:
             assert torch.isfinite(expected_state).all()
@@ -7333,7 +7338,9 @@ def test_small_bh_strided_prefill_replays_without_input_copies(
         ) as prof:
             run()
         stream.synchronize()
-    assert "aten::contiguous" not in {event.key for event in prof.key_averages()}
+    assert not {"aten::contiguous", "aten::select", "aten::reshape", "aten::view"} & {
+        event.key for event in prof.key_averages()
+    }
     graph = torch.cuda.CUDAGraph()
     with torch.cuda.graph(graph, stream=stream):
         run()

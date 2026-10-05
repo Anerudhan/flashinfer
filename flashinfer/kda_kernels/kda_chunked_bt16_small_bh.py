@@ -2976,6 +2976,19 @@ class ChunkKdaFwd:
         gate_scale: cutlass.Float32,
         stream,
     ):
+        if cutlass.const_expr(cu_seqlens is not None and cute.rank(q) == 4):
+            q, k, v, g = (
+                q[0, None, None, None],
+                k[0, None, None, None],
+                v[0, None, None, None],
+                g[0, None, None, None],
+            )
+            beta, output = beta[0, None, None], output[0, None, None, None]
+        if cutlass.const_expr(cute.rank(dt_bias) == 1):
+            dt_bias = cute.make_tensor(
+                dt_bias.iterator,
+                cute.make_layout((self.k1.H, self.k1.D), stride=(self.k1.D, 1)),
+            )
         self.k1(
             q,
             k,
@@ -3025,6 +3038,8 @@ def _compile_forward(
     gate_lower_bound: bool,
     is_varlen: bool,
     max_active_clusters: int,
+    packed_batch_dim: bool,
+    flat_bias: bool,
 ):
     cu_dtype = _cute_dtype(dtype)
     b, bs, t, tp, nt = (cute.sym_int() for _ in range(5))
@@ -3034,9 +3049,9 @@ def _compile_forward(
     matrix: tuple[object, ...]
     gate: tuple[object, ...]
     if is_varlen:
-        feature = (t, h, d)
+        feature = (1, t, h, d) if packed_batch_dim else (t, h, d)
         padded_feature = (tp, h, d)
-        beta_shape = (t, h)
+        beta_shape = (1, t, h) if packed_batch_dim else (t, h)
         matrix = (nt, h, _BT, _BT)
         gate = (nt, h, d)
         cu_seqlens = _fake(_cute_dtype(seqlen_dtype), (bs,))
@@ -3064,7 +3079,7 @@ def _compile_forward(
         _fake_stride(cu_dtype, feature),
         _fake_stride(cu_dtype, feature),
         _fake_stride(cu_dtype, beta_shape),
-        _fake(cutlass.Float32, (h, d)),
+        _fake(cutlass.Float32, (h * d,) if flat_bias else (h, d)),
         _fake(cutlass.Float32, (h,)),
         *(_fake(cu_dtype, padded_feature) for _ in range(3)),
         _fake(cu_dtype, matrix),
@@ -3281,6 +3296,8 @@ def chunk_kda_fwd(
             gate_lower_bound,
             is_varlen,
             max_active_clusters,
+            is_varlen and q.ndim == 4,
+            dt_bias.ndim == 1,
         )
         compiled(
             q,
