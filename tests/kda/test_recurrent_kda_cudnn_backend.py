@@ -875,3 +875,86 @@ def test_cudnn_entry_point_requires_cu_seqlens():
         cudnn_recurrent_kda(
             inputs["q"], inputs["k"], inputs["v"], inputs["g"], inputs["beta"]
         )
+
+
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
+@pytest.mark.parametrize("heads,total", [(2, 64), (6, 8192), (12, 512), (16, 512)])
+@pytest.mark.parametrize("magnitude", [1.0, 1e-4])
+def test_cudnn_additive_normalization_matches_rounded_reference(
+    dtype, heads, total, magnitude
+):
+    inputs = _make_inputs(
+        [0, total // 3, total - total // 3],
+        heads,
+        dtype=dtype,
+        initial_state=True,
+        gate_bias=-4.0 if dtype == torch.float16 else 0.0,
+    )
+    inputs["q"].mul_(magnitude)
+    inputs["k"].mul_(magnitude)
+    inputs["q"][:, 0].zero_()
+    for eps in (1e-6, 1e-2, 1e-6):
+        control = inputs.copy()
+        for name in ("q", "k"):
+            x = inputs[name].double()
+            control[name] = (
+                x * torch.rsqrt(x.square().sum(-1, keepdim=True) + eps)
+            ).to(dtype)
+        expected = _run(
+            control,
+            **_gate_kwargs(control, use_qk_l2norm_in_kernel=False),
+            initial_state=inputs["initial_state"],
+            output_state=torch.empty_like(inputs["initial_state"]),
+            output_final_state=True,
+        )
+        actual = _run(
+            inputs,
+            **_gate_kwargs(inputs),
+            qk_l2norm_additive_epsilon=eps,
+            initial_state=inputs["initial_state"],
+            output_state=torch.empty_like(inputs["initial_state"]),
+            output_final_state=True,
+        )
+        for a, b in zip(actual, expected, strict=True):
+            assert torch.isfinite(b).all(), (
+                "materialized normalization control overflowed"
+            )
+            assert torch.isfinite(a).all()
+            assert rel_err(a, b) < KERNEL_TOLERANCE
+
+
+@pytest.mark.parametrize(
+    "eps", [0, -1, True, float("nan"), float("inf"), 1e-50, 1e50, "1e-6"]
+)
+def test_cudnn_additive_normalization_rejects_invalid_epsilon(eps):
+    inputs = _make_inputs([64], 2)
+    with pytest.raises(ValueError, match="positive normal FP32 range"):
+        _run(inputs, **_gate_kwargs(inputs), qk_l2norm_additive_epsilon=eps)
+
+
+def test_cudnn_additive_normalization_requires_enabled_norm():
+    inputs = _make_inputs([64], 2)
+    with pytest.raises(ValueError, match="requires use_qk_l2norm_in_kernel=True"):
+        _run(
+            inputs,
+            **_gate_kwargs(inputs, use_qk_l2norm_in_kernel=False),
+            qk_l2norm_additive_epsilon=1e-6,
+        )
+
+
+@pytest.mark.parametrize("backend", ["auto", "cute-dsl", "cake"])
+def test_additive_normalization_does_not_change_backend_selection(backend):
+    inputs = _make_inputs([64], 2)
+    with pytest.raises(
+        NotImplementedError, match="qk_l2norm_additive_epsilon requires backend='cudnn'"
+    ):
+        recurrent_kda(
+            inputs["q"],
+            inputs["k"],
+            inputs["v"],
+            inputs["g"],
+            inputs["beta"],
+            **_gate_kwargs(inputs),
+            backend=backend,
+            qk_l2norm_additive_epsilon=1e-6,
+        )

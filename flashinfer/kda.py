@@ -82,6 +82,7 @@ def recurrent_kda(
         "small-bh",
         "cudnn",
     ] = "auto",
+    qk_l2norm_additive_epsilon: Optional[float] = None,
 ) -> (
     tuple[torch.Tensor, Optional[torch.Tensor]]
     | tuple[torch.Tensor, Optional[torch.Tensor], torch.Tensor]
@@ -154,6 +155,11 @@ def recurrent_kda(
             padding between pool slots is allowed.
         output_final_state (bool):
             Whether to return the final state. Default: ``False``.
+        qk_l2norm_additive_epsilon (float, optional):
+            Explicit additive epsilon for ``backend="cudnn"`` normalization.
+            Computes FP32 ``x * rsqrt(sum(x*x) + eps)`` and rounds to the input
+            dtype before KDA. Requires normalization enabled and cuDNN frontend
+            with this graph attribute. ``None`` preserves existing semantics.
         use_qk_l2norm_in_kernel (bool):
             Whether to apply L2 normalization to Q and K. Default: ``True``.
         use_gate_in_kernel (bool):
@@ -340,6 +346,8 @@ def recurrent_kda(
             "backend must be 'auto', 'cute-dsl', 'cute-dsl-persistent', 'tirx', 'ptx', 'cake', 'small-bh', or 'cudnn', "
             f"got {backend!r}"
         )
+    if qk_l2norm_additive_epsilon is not None and backend != "cudnn":
+        raise NotImplementedError("qk_l2norm_additive_epsilon requires backend='cudnn'")
     if output_state is not None and backend != "cudnn":
         raise NotImplementedError("output_state requires backend='cudnn'")
     if backend == "cute-dsl-persistent":
@@ -524,6 +532,7 @@ def recurrent_kda(
             beta_is_logit=beta_is_logit,
             output=output,
             output_state=output_state,
+            qk_l2norm_additive_epsilon=qk_l2norm_additive_epsilon,
         )
     if checkpoint_state_indices is not None and backend == "cake":
         raise ValueError("checkpoint_state_indices is supported only by CuTe DSL")

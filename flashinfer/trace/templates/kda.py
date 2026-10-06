@@ -92,6 +92,7 @@ def _recurrent_kda_template(
             "scale": Scalar("float32", optional=True),
             "output_final_state": Scalar("int32", optional=True),
             "use_qk_l2norm_in_kernel": Scalar("int32", optional=True),
+            "qk_l2norm_additive_epsilon": Scalar("float32", optional=True),
             "use_gate_in_kernel": Scalar("int32", optional=True),
             "lower_bound": Scalar("float32", optional=True),
             "num_spec_tokens": Scalar("int32", optional=True),
