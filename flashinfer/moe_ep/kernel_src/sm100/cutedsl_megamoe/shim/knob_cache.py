@@ -48,7 +48,6 @@ import tempfile
 import warnings
 from typing import Any, Dict, List, Optional, Tuple
 
-_CACHE_VERSION = 2
 _KEY_FIELDS = (
     "device",
     "dtype",
@@ -89,6 +88,8 @@ def _current_device_name() -> str:
 
 
 def _load_entries(path: str) -> List[Dict[str, Any]]:
+    from flashinfer.moe_ep.core.tuning import KNOB_CACHE_VERSION
+
     try:
         with open(path) as f:
             data = json.load(f)
@@ -102,7 +103,7 @@ def _load_entries(path: str) -> List[Dict[str, Any]]:
             stacklevel=3,
         )
         return []
-    if not isinstance(data, dict) or data.get("version") != _CACHE_VERSION:
+    if not isinstance(data, dict) or data.get("version") != KNOB_CACHE_VERSION:
         warnings.warn(
             f"[moe_ep-knob-cache] {path!r} has unsupported version "
             f"{data.get('version') if isinstance(data, dict) else '?'}; ignoring.",
@@ -314,9 +315,13 @@ def record_knobs(
         fd, tmp = tempfile.mkstemp(
             dir=os.path.dirname(path), prefix=".moe_ep_knob_cache."
         )
+        from flashinfer.moe_ep.core.tuning import KNOB_CACHE_VERSION
+
         try:
             with os.fdopen(fd, "w") as f:
-                json.dump({"version": _CACHE_VERSION, "entries": entries}, f, indent=1)
+                json.dump(
+                    {"version": KNOB_CACHE_VERSION, "entries": entries}, f, indent=1
+                )
             os.replace(tmp, path)
         except BaseException:
             with contextlib.suppress(OSError):

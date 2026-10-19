@@ -714,6 +714,7 @@ def test_blackwell_genphase_tuning_cache_exact_identity_constraints_and_invalid_
 ):
     """Cache reuse requires exact profiles and preserves unrelated or invalid data."""
     import json
+    from flashinfer.moe_ep.core.tuning import KNOB_CACHE_VERSION
     from flashinfer.moe_ep.kernel_src.sm100.next_cutedsl_megamoe.shim import (
         knob_cache as cache,
     )
@@ -723,7 +724,12 @@ def test_blackwell_genphase_tuning_cache_exact_identity_constraints_and_invalid_
     cfg = _genphase_tuning_config()
     winner = sm100_genphase_candidates(cfg, sm_count=148, live_tokens=16)[-1]
     path.write_text(
-        json.dumps(dict(version=1, entries=[dict(device="legacy", knobs={})]))
+        json.dumps(
+            dict(
+                version=KNOB_CACHE_VERSION,
+                entries=[dict(device="legacy", knobs={})],
+            )
+        )
     )
     assert cache.record_knobs(winner, cfg, live_tokens=16, p50_us=200, device="B300")
     assert cache.resolve_knobs(cfg, sm_count=148, live_tokens=16, device="B300") == (
