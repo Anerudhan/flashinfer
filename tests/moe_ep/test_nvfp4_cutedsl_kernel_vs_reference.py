@@ -65,7 +65,7 @@ def _run_blackwell_genphase_graph(rank, world, capacity, early, tile_n, cluster_
         intermediate=intermediate,
         rank=rank,
         world_size=world,
-        apply_topk_at_fc1=early,
+        apply_routing_weights_before_fc2=early,
         mma_tiler_mnk=(256, tile_n, 128),
         cluster_shape_mn=(cluster_m, 1),
     )

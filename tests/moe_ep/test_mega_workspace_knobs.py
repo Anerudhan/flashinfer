@@ -633,7 +633,7 @@ def test_blackwell_genphase_tuning_constraints_and_resource_budget():
         dict(mma_tiler_mnk=(256, 128, 128), cluster_shape_mn=(2, 1)),
         dict(schedule_policy=("grouped", 0)),
         dict(schedule_policy=("grouped", True)),
-        dict(apply_topk_at_fc1=False),
+        dict(apply_routing_weights_before_fc2=False),
     ]:
         with pytest.raises(ValueError):
             sm100_genphase_candidates(cfg, sm_count=148, constraints=constraints)
@@ -673,7 +673,7 @@ def test_blackwell_genphase_autotune_rejects_incomplete_candidates_before_trials
     invalid = {
         "partial": {"schedule_policy": ("grouped", 296)},
         "empty": {},
-        "extra": {**valid, "apply_topk_at_fc1": False},
+        "extra": {**valid, "apply_routing_weights_before_fc2": False},
     }[malformed]
     monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
     monkeypatch.setattr(torch.cuda, "current_device", lambda: 0)
@@ -750,7 +750,7 @@ def test_blackwell_genphase_tuning_cache_exact_identity_constraints_and_invalid_
         dict(max_tokens_per_rank=512),
         dict(world_size=4),
         dict(gate_up_clamp=10),
-        dict(apply_topk_at_fc1=False),
+        dict(apply_routing_weights_before_fc2=False),
     ]:
         assert (
             cache.resolve_knobs(
@@ -791,7 +791,7 @@ def test_blackwell_genphase_tuning_cache_exact_identity_constraints_and_invalid_
         )
         assert cache.live_token_buckets(cfg, device="B300") == []
     data["entries"][-1]["backend_revision"] = current_revision
-    data["entries"][-1]["knobs"]["apply_topk_at_fc1"] = False
+    data["entries"][-1]["knobs"]["apply_routing_weights_before_fc2"] = False
     path.write_text(json.dumps(data))
     assert (
         cache.resolve_knobs(cfg, sm_count=148, live_tokens=16, device="B300")[1]

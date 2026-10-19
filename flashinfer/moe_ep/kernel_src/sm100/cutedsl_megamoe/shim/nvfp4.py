@@ -1269,9 +1269,9 @@ def get_symm_buffer_for_mega_moe(
     #   despite the autotuner supporting disabling ikr if it would be faster.
     #   ikr is taken as permission to violate batch invariance so selecting different knobs is fine
     #   We have now enabled varying the knobs here, revisit this if we see unexpected behavior
-    assert (
-        not cfg.in_kernel_fc2_reduce or cfg.enable_in_kernel_fc2_reduce
-    ), "in_kernel_fc2_reduce must be disabled if enable_in_kernel_fc2_reduce is False"
+    assert not cfg.in_kernel_fc2_reduce or cfg.enable_in_kernel_fc2_reduce, (
+        "in_kernel_fc2_reduce must be disabled if enable_in_kernel_fc2_reduce is False"
+    )
     frontend = MegaMoENvfp4Frontend(cfg)
 
     hidden_sf_cols = ceil_div(hidden, Nvfp4BlockSize)
