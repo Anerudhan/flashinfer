@@ -16,6 +16,7 @@ backend's Fleet __init__.
 from __future__ import annotations
 
 import enum
+import warnings
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable, Optional, Sequence, Union
 
@@ -70,6 +71,15 @@ def validate_finalize_mode(
             "caller-owned CUDA int32 tensor of shape (1,) holding the live "
             "token count."
         )
+
+
+def warn_deprecated_config_field(old: str, new: str) -> None:
+    # stacklevel targets the caller of the dataclass __init__.
+    warnings.warn(
+        f"{old} is deprecated and will be removed in a future release; use {new}.",
+        DeprecationWarning,
+        stacklevel=4,
+    )
 
 
 class EpLayout(enum.Enum):

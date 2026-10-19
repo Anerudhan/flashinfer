@@ -6,7 +6,11 @@ import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
-from flashinfer.moe_ep.config import FinalizeMode, validate_finalize_mode
+from flashinfer.moe_ep.config import (
+    FinalizeMode,
+    validate_finalize_mode,
+    warn_deprecated_config_field,
+)
 
 if TYPE_CHECKING:
     import torch
@@ -56,8 +60,29 @@ class Sm100_Bf16_Nvfp4_Bf16_Cutedsl_MegaMoeConfig:
     activation_clamp: float | None = None
     # NONE makes MoEEpMegaLayer.forward return per-route outputs.
     finalize_mode: FinalizeMode = FinalizeMode.AUTO
+    # Deprecated aliases of finalize_mode and apply_routing_weights_before_fc2;
+    # __post_init__ maps them, then clears them.
+    do_finalize: bool | None = None
+    apply_topk_in_fc1: bool | None = None
 
     def __post_init__(self) -> None:
+        if self.do_finalize is not None:
+            warn_deprecated_config_field("do_finalize", "finalize_mode")
+            if self.finalize_mode is not FinalizeMode.AUTO:
+                raise ValueError(
+                    "do_finalize and finalize_mode cannot both be set; "
+                    "use finalize_mode."
+                )
+            self.finalize_mode = (
+                FinalizeMode.AUTO if self.do_finalize else FinalizeMode.NONE
+            )
+            self.do_finalize = None
+        if self.apply_topk_in_fc1 is not None:
+            warn_deprecated_config_field(
+                "apply_topk_in_fc1", "apply_routing_weights_before_fc2"
+            )
+            self.apply_routing_weights_before_fc2 = self.apply_topk_in_fc1
+            self.apply_topk_in_fc1 = None
         validate_finalize_mode(
             self.finalize_mode,
             (FinalizeMode.AUTO, FinalizeMode.DEFAULT, FinalizeMode.NONE),
