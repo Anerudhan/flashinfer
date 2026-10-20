@@ -14,6 +14,8 @@ from typing import Any, Literal, Optional, Tuple
 
 import torch
 
+from flashinfer.moe_ep._compat import deprecated_aliases
+
 from . import comm
 from .kernel_helpers import Mxfp8BlockSize, Nvfp4BlockSize, swizzled_flat_sf_size
 
@@ -86,6 +88,7 @@ def _max_active_clusters(cluster_size: int) -> int:
     return cached
 
 
+@deprecated_aliases(apply_topk_at_fc1="apply_routing_weights_before_fc2")
 @dataclasses.dataclass(frozen=True)
 class BlockScaledMoeConfig:
     """Validated construction parameters for block-scaled inference and GenPhase."""
@@ -571,11 +574,10 @@ class BlockScaledSymmBuffer:
     @classmethod
     def _build_kernel(cls, cfg: BlockScaledMoeConfig):
         import cutlass
-        from cutlass.cute.nvgpu import OperandMajorMode
-
         from blackwell_genphase_sources import BlackwellInferenceGenphaseMegaMoE
         from blackwell_genphase_sources.api import ImplDesc, ProblemDesc
         from blackwell_genphase_sources.quant_def import CombineFormat
+        from cutlass.cute.nvgpu import OperandMajorMode
 
         tiler = cfg.resolved_mma_tiler_mnk
         cluster_size = cfg.cluster_shape_mn[0] * cfg.cluster_shape_mn[1]

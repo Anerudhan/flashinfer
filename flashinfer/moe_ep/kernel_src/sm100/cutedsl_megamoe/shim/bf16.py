@@ -10,6 +10,8 @@ from typing import Callable, Literal, Optional, Tuple
 
 import torch
 
+from flashinfer.moe_ep._compat import deprecated_aliases
+
 from .comm import (
     _CompiledMega,
     _compute_peer_offsets,
@@ -21,6 +23,7 @@ from .comm import (
 )
 
 
+@deprecated_aliases(apply_topk_in_fc1="apply_routing_weights_before_fc2")
 @dataclasses.dataclass(frozen=True)
 class MegaMoEBf16Config:
     """Compile-time and launch-time BF16 MegaMoE configuration."""
@@ -50,7 +53,7 @@ class MegaMoEBf16Config:
     gate_up_clamp: Optional[float] = None
     apply_routing_weights_before_fc2: bool = True
     enable_iket: bool = False
-    use_custom_finalize: bool = False
+    use_custom_finalize: bool = dataclasses.field(default=False, kw_only=True)
 
     def __post_init__(self) -> None:
         if self.world_size < 1 or not 0 <= self.rank < self.world_size:

@@ -7,7 +7,6 @@ import torch
 
 from flashinfer.moe_ep import tune
 
-
 _GEOMETRY = [
     "--hidden",
     "7168",
@@ -98,8 +97,12 @@ def test_unsupported_tuner_options_fail_before_import(options, dispatched, capsy
     "options,do_finalize",
     [([], True), (["--do-finalize"], True), (["--no-do-finalize"], False)],
 )
+@pytest.mark.parametrize(
+    "routing_option",
+    ["--no-apply-routing-weights-before-fc2", "--no-apply-topk-in-fc1"],
+)
 def test_finalization_and_routing_options_reach_nvfp4_tuner(
-    monkeypatch, options, do_finalize
+    monkeypatch, options, do_finalize, routing_option
 ):
     received = []
     monkeypatch.setattr(
@@ -113,7 +116,7 @@ def test_finalization_and_routing_options_reach_nvfp4_tuner(
             "--arch",
             "sm100",
             *options,
-            "--no-apply-routing-weights-before-fc2",
+            routing_option,
         ]
     )
     (args,) = received

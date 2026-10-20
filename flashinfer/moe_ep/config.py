@@ -44,6 +44,10 @@ class FinalizeMode(enum.Enum):
       ``(rows, weights, route_map)`` for caller finalization.
 
     Each backend accepts the subset it implements.
+
+    The former ``do_finalize`` option remains an alias on configs that exposed
+    it: ``True`` maps to ``AUTO`` and ``False`` to ``NONE``. Reading the alias
+    returns whether finalization is enabled. Use ``finalize_mode`` in new code.
     """
 
     AUTO = 0

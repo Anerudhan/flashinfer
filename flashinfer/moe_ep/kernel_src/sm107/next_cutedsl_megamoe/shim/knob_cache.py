@@ -25,6 +25,8 @@ import tempfile
 import warnings
 from typing import Any, Dict, List, Optional, Tuple
 
+from flashinfer.moe_ep._compat import deprecated_aliases
+
 _KEY_FIELDS = (
     "backend_revision",
     "kernel_variant",
@@ -165,12 +167,14 @@ def _matching_entries(
     return matches
 
 
+@deprecated_aliases(apply_topk_at_fc1="apply_routing_weights_before_fc2")
 def live_token_buckets(**kwargs: Any) -> List[int]:
     from flashinfer.moe_ep.core.tuning import live_buckets
 
     return live_buckets(_matching_entries(**kwargs), kwargs["max_tokens"])
 
 
+@deprecated_aliases(apply_topk_at_fc1="apply_routing_weights_before_fc2")
 def lookup_knobs(
     *,
     dtype: str,
@@ -222,6 +226,7 @@ def lookup_knobs(
     return _knobs_from_json(best["knobs"])
 
 
+@deprecated_aliases(apply_topk_at_fc1="apply_routing_weights_before_fc2")
 def record_knobs(
     knobs: Dict[str, Any],
     *,
@@ -376,6 +381,7 @@ def default_knobs(
     return knobs
 
 
+@deprecated_aliases(apply_topk_at_fc1="apply_routing_weights_before_fc2")
 def resolve_knobs(
     *,
     dtype: str,

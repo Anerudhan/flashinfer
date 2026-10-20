@@ -24,6 +24,8 @@ from typing import Optional, Sequence, Tuple
 
 import torch
 
+from flashinfer.moe_ep._compat import deprecated_aliases
+
 Mxfp8BlockSize = 32
 Nvfp4BlockSize = 16
 GateUpInterleave = 16  # fixed by the swap-AB gated-act epilogue (gate/up stripe)
@@ -508,6 +510,7 @@ def round_trip_combine(tensor: torch.Tensor, combine_dtype: str) -> torch.Tensor
     raise ValueError(f"unsupported combine_dtype {combine_dtype!r}")
 
 
+@deprecated_aliases(apply_topk_at_fc1="apply_routing_weights_before_fc2")
 def compute_megamoe_reference_block_scaled(
     x_data: torch.Tensor,
     x_sf: torch.Tensor,

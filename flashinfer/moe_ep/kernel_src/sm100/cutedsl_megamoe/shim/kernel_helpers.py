@@ -35,6 +35,8 @@ from moe_nvfp4_swapab.runner_common import (
     to_blocked,
 )
 
+from flashinfer.moe_ep._compat import deprecated_aliases
+
 mxfp8_quantize_per_block_32 = mxfp8_quantize_per_block_32_row
 
 # --- lazy: pull cutlass transitively; imported only on first attribute access
@@ -116,6 +118,7 @@ def _reference_with_routing_weight_name(
     )
 
 
+@deprecated_aliases(apply_topk_in_fc1="apply_routing_weights_before_fc2")
 def compute_megamoe_reference_mxfp8(
     *args, apply_routing_weights_before_fc2=False, **kwargs
 ):
@@ -128,6 +131,7 @@ def compute_megamoe_reference_mxfp8(
     )
 
 
+@deprecated_aliases(apply_topk_in_fc1="apply_routing_weights_before_fc2")
 def compute_megamoe_reference_bf16_mxfp8(
     *args, apply_routing_weights_before_fc2=False, **kwargs
 ):
@@ -140,6 +144,7 @@ def compute_megamoe_reference_bf16_mxfp8(
     )
 
 
+@deprecated_aliases(apply_topk_in_fc1="apply_routing_weights_before_fc2")
 def compute_megamoe_reference_bf16(
     *args, apply_routing_weights_before_fc2=False, **kwargs
 ):

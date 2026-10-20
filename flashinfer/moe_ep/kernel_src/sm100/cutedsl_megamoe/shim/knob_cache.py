@@ -48,6 +48,8 @@ import tempfile
 import warnings
 from typing import Any, Dict, List, Optional, Tuple
 
+from flashinfer.moe_ep._compat import deprecated_aliases
+
 _KEY_FIELDS = (
     "device",
     "dtype",
@@ -134,6 +136,10 @@ def _entry_needs_ikr(entry: Dict[str, Any]) -> bool:
     return bool(isinstance(knobs, dict) and knobs.get("in_kernel_fc2_reduce"))
 
 
+@deprecated_aliases(
+    apply_topk_in_fc1="apply_routing_weights_before_fc2",
+    defer_topk_reduce="use_custom_finalize",
+)
 def _matching_entries(
     *,
     dtype: str,
@@ -181,12 +187,20 @@ def _matching_entries(
     return matches
 
 
+@deprecated_aliases(
+    apply_topk_in_fc1="apply_routing_weights_before_fc2",
+    defer_topk_reduce="use_custom_finalize",
+)
 def live_token_buckets(**kwargs: Any) -> List[int]:
     from flashinfer.moe_ep.core.tuning import live_buckets
 
     return live_buckets(_matching_entries(**kwargs), kwargs["max_tokens"])
 
 
+@deprecated_aliases(
+    apply_topk_in_fc1="apply_routing_weights_before_fc2",
+    defer_topk_reduce="use_custom_finalize",
+)
 def lookup_knobs(
     *,
     dtype: str,
@@ -237,6 +251,10 @@ def lookup_knobs(
     return _knobs_from_json(best["knobs"])
 
 
+@deprecated_aliases(
+    apply_topk_in_fc1="apply_routing_weights_before_fc2",
+    defer_topk_reduce="use_custom_finalize",
+)
 def record_knobs(
     knobs: Dict[str, Any],
     *,
@@ -337,6 +355,10 @@ def record_knobs(
     return path
 
 
+@deprecated_aliases(
+    apply_topk_in_fc1="apply_routing_weights_before_fc2",
+    defer_topk_reduce="use_custom_finalize",
+)
 def resolve_knobs(
     *,
     dtype: str,

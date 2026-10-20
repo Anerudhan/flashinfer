@@ -48,6 +48,15 @@ from dataclasses import dataclass, field
 from typing import Callable, Literal, Optional, Tuple, Union
 
 import torch
+from common.megamoe_constants import Nvfp4BlockSize
+from moe_nvfp4_swapab.runner_common import (
+    _DataDtype,
+    _ScaleDtype,
+    ceil_div,
+    round_up,
+)
+
+from flashinfer.moe_ep._compat import deprecated_aliases
 
 from .comm import (
     _CompiledMega,
@@ -59,14 +68,6 @@ from .comm import (
     resolve_gate_up_clamp,
     sym_zeros,
 )
-from common.megamoe_constants import Nvfp4BlockSize
-from moe_nvfp4_swapab.runner_common import (
-    _DataDtype,
-    _ScaleDtype,
-    ceil_div,
-    round_up,
-)
-
 
 # Config combine_dtype -> kernel CombineFormat spelling.  The quantized wire
 # formats shrink the cross-rank combine traffic 2x (fp8+e8m0 SF) / 4x
@@ -78,6 +79,10 @@ COMBINE_FORMAT_NAMES = {
 }
 
 
+@deprecated_aliases(
+    apply_topk_in_fc1="apply_routing_weights_before_fc2",
+    defer_topk_reduce="use_custom_finalize",
+)
 @dataclasses.dataclass(frozen=True)
 class MegaMoENvfp4Config:
     """Compile-time / launch-time NVFP4 MegaMoE configuration."""
@@ -104,7 +109,9 @@ class MegaMoENvfp4Config:
     enable_in_kernel_fc2_reduce: bool = False
     in_kernel_fc2_reduce: bool = False
     use_custom_finalize: bool = False
-    use_persistent_finalize_kernel: bool = False
+    use_persistent_finalize_kernel: bool = dataclasses.field(
+        default=False, kw_only=True
+    )
     token_back_mode: Literal[
         "epi_warps", "standalone_warps", "reuse_dispatch_warps"
     ] = "epi_warps"
@@ -287,7 +294,7 @@ class MegaMoENvfp4Inputs:
     fc2_alpha: torch.Tensor
     fc1_norm_const: torch.Tensor
     output_activation: torch.Tensor
-    num_valid_tokens: Optional[torch.Tensor]
+    num_valid_tokens: Optional[torch.Tensor] = None
 
 
 class MegaMoENvfp4Frontend:
@@ -492,6 +499,8 @@ class MegaMoENvfp4Frontend:
             raise RuntimeError("borrowed combine view violates canonical alignment")
         return partials, root, dict(descriptor)
 
+    deferred_topk_reduce_workspace = custom_finalize_workspace
+
     @staticmethod
     def _launch_cache_key(inputs: MegaMoENvfp4Inputs, num_tokens: int) -> tuple:
         # Keyed on the RAW (pre-slice) input pointers + the resolved token
@@ -566,7 +575,6 @@ class MegaMoENvfp4Frontend:
 
         import cutlass
         import cutlass.cute as cute
-
         from common.megamoe_constants import SfPaddingBlock
         from moe_nvfp4_swapab.epilogue_refactor import SwapABSwigluFp4Epilogue
         from moe_nvfp4_swapab.megamoe_kernel import Sm100MegaMoEKernel
@@ -1096,7 +1104,9 @@ class MegaMoESymmBuffer:
     topk_weights: torch.Tensor
     output_activation: torch.Tensor
     # Borrowed, caller-owned; never written or freed here.
-    num_valid_tokens: Optional[torch.Tensor]
+    num_valid_tokens: Optional[torch.Tensor] = dataclasses.field(
+        default=None, kw_only=True
+    )
     fc1_alpha: torch.Tensor
     fc2_alpha: torch.Tensor
     fc1_norm_const: torch.Tensor
@@ -1124,6 +1134,10 @@ class MegaMoESymmBuffer:
         return self.num_total_experts // self.world_size
 
 
+@deprecated_aliases(
+    apply_topk_in_fc1="apply_routing_weights_before_fc2",
+    defer_topk_reduce="use_custom_finalize",
+)
 def get_symm_buffer_for_mega_moe(
     num_total_experts: int,
     num_max_tokens: int,
@@ -1619,6 +1633,10 @@ def _create_dummy_weights(
     return (fc1_weight, fc1_weight_sf), (fc2_weight, fc2_weight_sf)
 
 
+@deprecated_aliases(
+    apply_topk_in_fc1="apply_routing_weights_before_fc2",
+    defer_topk_reduce="use_custom_finalize",
+)
 def create_dummy_inputs(
     rank: int,
     world_size: int,

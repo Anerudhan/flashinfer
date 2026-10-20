@@ -25,8 +25,6 @@ Hopper-specific deltas vs the SM100 MXFP8 frontend:
 
 from __future__ import annotations
 
-from ..src.moe_hopper_fp8.fused_comm_policy import FUSED_COMM_OPTIMIZATION_VERSION
-
 import dataclasses
 import os
 import warnings
@@ -35,6 +33,9 @@ from typing import Any, Callable, Dict, Literal, Optional, Tuple  # noqa: F401
 
 import torch
 
+from flashinfer.moe_ep._compat import deprecated_aliases
+
+from ..src.moe_hopper_fp8.fused_comm_policy import FUSED_COMM_OPTIMIZATION_VERSION
 from .comm import (
     _CompiledMega,
     _compute_peer_offsets,
@@ -104,6 +105,7 @@ def _kind_to_cutlass_dtype(kind: str):
     }[kind]
 
 
+@deprecated_aliases(apply_topk_in_fc1="apply_routing_weights_before_fc2")
 @dataclasses.dataclass(frozen=True)
 class MegaMoEHopperFp8Config:
     """Compile-time / launch-time SM90 FP8 MegaMoE configuration.
@@ -764,7 +766,6 @@ class MegaMoEHopperFp8Frontend:
 
         import cutlass.cute as cute
         import cutlass.utils as cutlass_utils
-
         from common.megamoe_constants import Fp8E8M0SfVecSize, SfPaddingBlock
         from moe_hopper_fp8.megamoe_kernel_fp8 import (
             Sm90MegaMoEFp8Kernel,
@@ -1381,6 +1382,7 @@ class MegaMoEHopperFp8SymmBuffer:
         return cached
 
 
+@deprecated_aliases(apply_topk_in_fc1="apply_routing_weights_before_fc2")
 def resolve_hopper_fp8_mega_moe_config(
     num_total_experts: int,
     num_max_tokens: int,
@@ -1577,6 +1579,7 @@ def resolve_hopper_fp8_mega_moe_config(
     return cfg
 
 
+@deprecated_aliases(apply_topk_in_fc1="apply_routing_weights_before_fc2")
 def get_symm_buffer_for_hopper_fp8_mega_moe(
     num_total_experts: int,
     num_max_tokens: int,

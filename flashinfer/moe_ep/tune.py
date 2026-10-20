@@ -182,6 +182,7 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--apply-routing-weights-before-fc2",
+        "--apply-topk-in-fc1",
         action=argparse.BooleanOptionalAction,
         default=True,
         help="apply routing weights in FC1; disable for post-FC2 weighting (SM100 NVFP4)",

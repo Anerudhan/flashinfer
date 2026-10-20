@@ -11,6 +11,8 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Literal, Optional, Tuple  # noqa: F401
 
 import torch
+from common.megamoe_constants import Mxfp8BlockSize
+from moe_nvfp4_swapab.runner_common import ceil_div, round_up
 
 from .comm import (
     _CompiledMega,
@@ -22,8 +24,6 @@ from .comm import (
     resolve_gate_up_clamp,
     sym_zeros,
 )
-from common.megamoe_constants import Mxfp8BlockSize
-from moe_nvfp4_swapab.runner_common import ceil_div, round_up
 
 _KIND_TO_TORCH_DTYPE = {
     "mxfp8_e4m3": torch.float8_e4m3fn,
@@ -69,8 +69,10 @@ class MegaMoEMxfp8Config:
     epi_flag_batch: Tuple[int, int] = (1, 1)
     enable_in_kernel_fc2_reduce: bool = False
     in_kernel_fc2_reduce: bool = False
-    use_persistent_finalize_kernel: bool = False
-    use_custom_finalize: bool = False
+    use_persistent_finalize_kernel: bool = dataclasses.field(
+        default=False, kw_only=True
+    )
+    use_custom_finalize: bool = dataclasses.field(default=False, kw_only=True)
     token_back_by_dispatch: bool = False
     gate_up_clamp: Optional[float] = None
     enable_iket: bool = False
@@ -198,7 +200,7 @@ class MegaMoEMxfp8Inputs:
     # Single 2D (T, hidden) bf16 output; the kernel reduces top-k internally
     # (the drop replaced the old form-A ``combine_output`` with this).
     output_activation: torch.Tensor
-    num_valid_tokens: Optional[torch.Tensor]
+    num_valid_tokens: Optional[torch.Tensor] = None
 
 
 class MegaMoEMxfp8Frontend:
@@ -435,7 +437,6 @@ class MegaMoEMxfp8Frontend:
         self._release_workspace()
 
         import cutlass.cute as cute
-
         from common.megamoe_constants import Mxfp8BlockSize, SfPaddingBlock
         from moe_mxfp8_glu.megamoe_kernel_mxfp8 import Sm100MegaMoEMxfp8Kernel
 
@@ -868,7 +869,9 @@ class MegaMoEMxfp8SymmBuffer:
     topk_weights: torch.Tensor
     output_activation: torch.Tensor
     # Borrowed, caller-owned; never written or freed here.
-    num_valid_tokens: Optional[torch.Tensor]
+    num_valid_tokens: Optional[torch.Tensor] = dataclasses.field(
+        default=None, kw_only=True
+    )
 
     _frontend: MegaMoEMxfp8Frontend
     _sym_roots: list[torch.Tensor] = field(default_factory=list)

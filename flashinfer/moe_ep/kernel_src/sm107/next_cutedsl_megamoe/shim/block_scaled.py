@@ -31,6 +31,8 @@ from typing import Any, Literal, Optional, Tuple
 
 import torch
 
+from flashinfer.moe_ep._compat import deprecated_aliases
+
 from . import comm
 from .dependencies import require_sm107_dsl
 from .kernel_helpers import Mxfp8BlockSize, Nvfp4BlockSize, swizzled_flat_sf_size
@@ -117,6 +119,7 @@ def _max_active_clusters(cluster_size: int) -> int:
     return cached
 
 
+@deprecated_aliases(apply_topk_at_fc1="apply_routing_weights_before_fc2")
 @dataclasses.dataclass(frozen=True)
 class Sm107BlockScaledMoeConfig:
     """Validated construction parameters for Rubin inference and GenPhase."""
@@ -581,7 +584,6 @@ class Sm107BlockScaledSymmBuffer:
     def _build_kernel(cfg: Sm107BlockScaledMoeConfig):
         import cutlass
         from cutlass.cute.nvgpu import OperandMajorMode
-
         from sources import RubinInferenceGenphaseMegaMoE, RubinInferenceMegaMoE
         from sources.api import ImplDesc, ProblemDesc
         from sources.quant_def import CombineFormat
@@ -833,6 +835,7 @@ class Sm107BlockScaledSymmBuffer:
         self._destroyed = True
 
 
+@deprecated_aliases(apply_topk_at_fc1="apply_routing_weights_before_fc2")
 def get_symm_buffer_for_sm107_block_scaled_mega_moe(
     num_total_experts: int,
     num_max_tokens: int,

@@ -11,6 +11,7 @@ from typing import Callable, Literal, Optional, Tuple
 
 import torch
 
+from flashinfer.moe_ep._compat import deprecated_aliases
 from flashinfer.moe_ep.kernel_src.sm100.cutedsl_megamoe import (
     _CompiledMega,
     _compute_peer_offsets,
@@ -22,6 +23,10 @@ from flashinfer.moe_ep.kernel_src.sm100.cutedsl_megamoe import (
 )
 
 
+@deprecated_aliases(
+    apply_topk_in_fc1="apply_routing_weights_before_fc2",
+    defer_topk_reduce="use_custom_finalize",
+)
 @dataclasses.dataclass(frozen=True)
 class MegaMoEBf16Nvfp4Config:
     """Compile-time and launch-time W4A16 MegaMoE configuration."""
@@ -256,6 +261,7 @@ class MegaMoEBf16Nvfp4Frontend:
         if self._mega is None:
             ensure_not_capturing("cute.compile + symmetric-heap allocation")
             import cutlass
+
             from .megamoe_kernel import Sm100W4A16MegaMoEKernel
 
             c = self.config
@@ -417,6 +423,7 @@ class MegaMoEBf16Nvfp4Frontend:
         self, inputs: MegaMoEBf16Nvfp4Inputs, mega: _CompiledMega
     ) -> dict:
         import cuda.bindings.driver as cuda
+
         from flashinfer.moe_ep.kernel_src.sm100.cutedsl_megamoe import SymBufferHost
 
         c = self.config
@@ -661,12 +668,13 @@ class MegaMoEBf16Nvfp4Frontend:
         # have no local rows to reduce and must not launch a zero-block grid.
         if output.shape[0] == 0:
             return
-        import cutlass.cute as cute
         import cuda.bindings.driver as cuda
+        import cutlass.cute as cute
+
         from flashinfer.moe_ep.kernel_src.sm100.cutedsl_megamoe import (
-            get_cutedsl_target_arch,
-            TopkReduce,
             CombineFormat,
+            TopkReduce,
+            get_cutedsl_target_arch,
         )
 
         def compact(tensor):
@@ -742,6 +750,10 @@ class MegaMoEBf16Nvfp4SymmBuffer:
 TransformedWeights = Tuple[torch.Tensor, torch.Tensor]
 
 
+@deprecated_aliases(
+    apply_topk_in_fc1="apply_routing_weights_before_fc2",
+    defer_topk_reduce="use_custom_finalize",
+)
 def get_symm_buffer_for_bf16_nvfp4_mega_moe(
     num_total_experts: int,
     num_max_tokens: int,

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal, Optional
 
 from flashinfer.moe_ep.config import FinalizeMode, validate_finalize_mode
@@ -42,11 +42,13 @@ class Sm100_Mxfp8_Mxfp8_Bf16_Cutedsl_MegaMoeConfig:
     enable_in_kernel_fc2_reduce: bool = False
     # NONE makes MoEEpMegaLayer.forward return per-route outputs for caller
     # finalization; it requires fixed/offline-tuned knobs.
-    finalize_mode: FinalizeMode = FinalizeMode.AUTO
+    finalize_mode: FinalizeMode = field(default=FinalizeMode.AUTO, kw_only=True)
     # Caller-owned CUDA int32 (1,) live-token count the PERSISTENT finalize kernel
     # reads; the workspace borrows it and never writes it. Update before every
     # forward.
-    num_valid_tokens_tensor: Optional["torch.Tensor"] = None
+    num_valid_tokens_tensor: Optional["torch.Tensor"] = field(
+        default=None, kw_only=True
+    )
     # GenPhase: None resolves the cache or geometry heuristic; dictionaries
     # constrain tile/cluster/schedule_policy; "auto" tunes at collective warmup.
     # Inference tuning knobs (see kernel_src.sm100.cutedsl_megamoe.shim.tuner); overrides

@@ -5,12 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Optional, Tuple
 
-from flashinfer.moe_ep.config import warn_deprecated_config_field
+from flashinfer.moe_ep._compat import deprecated_aliases
 
 if TYPE_CHECKING:
     import torch
 
 
+@deprecated_aliases(apply_topk_in_fc1="apply_routing_weights_before_fc2")
 @dataclass
 class Sm107_Nvfp4_Nvfp4_Bf16_Cutedsl_MegaMoeConfig:
     """Configure Rubin inference with NVFP4 activations and weights.
@@ -60,14 +61,3 @@ class Sm107_Nvfp4_Nvfp4_Bf16_Cutedsl_MegaMoeConfig:
     kernel_variant: Literal["inference", "genphase"] = "inference"
     # Quantizes the FC2 return payload; the operator still returns BF16.
     combine_dtype: Literal["bf16", "nvfp4", "mxfp8"] = "bf16"
-    # Deprecated alias of apply_routing_weights_before_fc2; __post_init__ maps it,
-    # then clears it.
-    apply_topk_in_fc1: Optional[bool] = None
-
-    def __post_init__(self) -> None:
-        if self.apply_topk_in_fc1 is not None:
-            warn_deprecated_config_field(
-                "apply_topk_in_fc1", "apply_routing_weights_before_fc2"
-            )
-            self.apply_routing_weights_before_fc2 = self.apply_topk_in_fc1
-            self.apply_topk_in_fc1 = None

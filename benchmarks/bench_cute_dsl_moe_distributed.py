@@ -102,7 +102,6 @@ from pathlib import Path
 
 import numpy as np
 import torch
-
 from bench_moe_deepseek import (
     DeepSeekConfig,
     is_sm100_family,
@@ -2081,6 +2080,7 @@ def main():
     )
     parser.add_argument(
         "--apply-routing-weights-before-fc2",
+        "--apply-topk-in-fc1",
         action="store_true",
         help="Weight MegaMoE FP32 activations before FC1 handoff quantization/casting.",
     )

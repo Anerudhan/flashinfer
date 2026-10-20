@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 from dataclasses import dataclass, field
-from typing import Callable, Literal, Optional, Tuple, Any
+from typing import Any, Callable, Literal, Optional, Tuple
 
 import torch
 
@@ -51,8 +51,10 @@ class MegaMoEBf16Mxfp8Config:
     epi_flag_batch: Tuple[int, int] = (1, 1)
     enable_in_kernel_fc2_reduce: bool = False
     in_kernel_fc2_reduce: bool = False
-    use_persistent_finalize_kernel: bool = False
-    use_custom_finalize: bool = False
+    use_persistent_finalize_kernel: bool = dataclasses.field(
+        default=False, kw_only=True
+    )
+    use_custom_finalize: bool = dataclasses.field(default=False, kw_only=True)
     token_back_mode: Literal["epi_warps", "reuse_dispatch_warps"] = "epi_warps"
     gate_up_clamp: Optional[float] = None
     enable_iket: bool = False
@@ -143,7 +145,7 @@ class MegaMoEBf16Mxfp8Inputs:
     fc2_weight: torch.Tensor
     fc2_weight_sf: torch.Tensor
     output_activation: torch.Tensor
-    num_valid_tokens: Optional[torch.Tensor]
+    num_valid_tokens: Optional[torch.Tensor] = None
 
 
 class MegaMoEBf16Mxfp8Frontend:
@@ -476,7 +478,9 @@ class MegaMoEBf16Mxfp8SymmBuffer:
     topk_weights: torch.Tensor
     output_activation: torch.Tensor
     # Borrowed, caller-owned; never written or freed here.
-    num_valid_tokens: Optional[torch.Tensor]
+    num_valid_tokens: Optional[torch.Tensor] = dataclasses.field(
+        default=None, kw_only=True
+    )
     _frontend: MegaMoEBf16Mxfp8Frontend
     _sym_roots: list[torch.Tensor] = field(default_factory=list)
     _destroyed: bool = False
@@ -590,9 +594,9 @@ def get_symm_buffer_for_bf16_mxfp8_mega_moe(
         topk_idx,
         topk_weights,
         output_activation,
-        num_valid_tokens_tensor,
         MegaMoEBf16Mxfp8Frontend(config),
         [x, topk_idx, topk_weights, output_activation],
+        num_valid_tokens=num_valid_tokens_tensor,
     )
 
 

@@ -3,19 +3,18 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal, Optional
 
-from flashinfer.moe_ep.config import (
-    FinalizeMode,
-    validate_finalize_mode,
-    warn_deprecated_config_field,
-)
+from flashinfer.moe_ep._compat import deprecated_aliases, legacy_finalize
+from flashinfer.moe_ep.config import FinalizeMode, validate_finalize_mode
 
 if TYPE_CHECKING:
     import torch
 
 
+@legacy_finalize
+@deprecated_aliases(apply_topk_in_fc1="apply_routing_weights_before_fc2")
 @dataclass
 class Sm100_Nvfp4_Nvfp4_Bf16_Cutedsl_MegaMoeConfig:
     """Kernel params for ``kernel_src.sm100.cutedsl_megamoe.nvfp4_mega_moe``.
@@ -54,7 +53,9 @@ class Sm100_Nvfp4_Nvfp4_Bf16_Cutedsl_MegaMoeConfig:
     # Caller-owned CUDA int32 (1,) live-token count the PERSISTENT finalize kernel
     # reads; the workspace borrows it and never writes it. Update before every
     # forward.
-    num_valid_tokens_tensor: Optional["torch.Tensor"] = None
+    num_valid_tokens_tensor: Optional["torch.Tensor"] = field(
+        default=None, kw_only=True
+    )
     input_norm_const: float = 1.0
     fc1_alpha: Optional["torch.Tensor"] = None
     fc2_alpha: Optional["torch.Tensor"] = None
@@ -72,29 +73,8 @@ class Sm100_Nvfp4_Nvfp4_Bf16_Cutedsl_MegaMoeConfig:
     # NONE makes MoEEpMegaLayer.forward return per-route outputs for caller
     # finalization; it requires fixed/offline-tuned knobs.
     finalize_mode: FinalizeMode = FinalizeMode.AUTO
-    # Deprecated aliases of finalize_mode and apply_routing_weights_before_fc2;
-    # __post_init__ maps them, then clears them.
-    do_finalize: bool | None = None
-    apply_topk_in_fc1: bool | None = None
 
     def __post_init__(self) -> None:
-        if self.do_finalize is not None:
-            warn_deprecated_config_field("do_finalize", "finalize_mode")
-            if self.finalize_mode is not FinalizeMode.AUTO:
-                raise ValueError(
-                    "do_finalize and finalize_mode cannot both be set; "
-                    "use finalize_mode."
-                )
-            self.finalize_mode = (
-                FinalizeMode.AUTO if self.do_finalize else FinalizeMode.NONE
-            )
-            self.do_finalize = None
-        if self.apply_topk_in_fc1 is not None:
-            warn_deprecated_config_field(
-                "apply_topk_in_fc1", "apply_routing_weights_before_fc2"
-            )
-            self.apply_routing_weights_before_fc2 = self.apply_topk_in_fc1
-            self.apply_topk_in_fc1 = None
         validate_finalize_mode(
             self.finalize_mode, tuple(FinalizeMode), self.num_valid_tokens_tensor
         )

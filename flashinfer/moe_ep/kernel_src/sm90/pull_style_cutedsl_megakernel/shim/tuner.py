@@ -32,6 +32,8 @@ import dataclasses
 import itertools
 from typing import Any, Dict, Iterator, Optional, Tuple
 
+from flashinfer.moe_ep._compat import deprecated_aliases
+
 # --- knob value-sets (geometry domains mirror the kernel ctor validation;
 # see kernel_fp8_glu_fc12{,_swapab}.py _validate_mma_tiler_and_cluster_shape).
 
@@ -122,6 +124,7 @@ def default_knobs(
     }
 
 
+@deprecated_aliases(apply_topk_in_fc1="apply_routing_weights_before_fc2")
 def is_valid(
     knobs: Dict[str, Any], *, apply_routing_weights_before_fc2: bool = True
 ) -> bool:
